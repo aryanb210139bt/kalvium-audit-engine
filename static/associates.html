@@ -1,0 +1,200 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit — Associate Performance</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { font-family:'Inter',sans-serif; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  :root { --k-red:#E8192C; }
+  body { margin:0; background:#fafafa; color:#111827; }
+  header { border-bottom:1px solid #f0f0f0; background:#fff; }
+  .card { background:#fff;border:1px solid #eceef1;border-radius:8px;padding:20px; }
+
+  .assoc-card { border:1px solid #e5e7eb;border-radius:8px;padding:16px;margin-bottom:10px;background:#fff; }
+  .assoc-card-head { display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap; }
+  .assoc-name { font-size:14px;font-weight:700;color:#111827; }
+  .assoc-meta { font-size:11.5px;color:#9ca3af;margin-top:2px; }
+  .assoc-score { font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:700;text-align:right; }
+  .assoc-score.good { color:#16a34a; } .assoc-score.avg { color:#d97706; } .assoc-score.bad { color:#dc2626; }
+  .assoc-trend-toggle { font-size:12px;color:#9ca3af;text-decoration:underline;cursor:pointer;background:none;border:none;padding:0;margin-top:10px; }
+  .assoc-detail { margin-top:12px;padding-top:12px;border-top:1px solid #f3f4f6; }
+  .assoc-detail-label { font-size:10px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin:10px 0 4px; }
+  .assoc-detail-label:first-child { margin-top:0; }
+  .assoc-row { display:flex;justify-content:space-between;font-size:12px;padding:3px 0;color:#374151; }
+</style>
+</head>
+<body>
+
+<header class="flex items-center justify-between px-6" style="height:56px">
+  <div class="flex items-center gap-3">
+    <a href="/static/dashboard.html" class="text-gray-400 hover:text-gray-700" title="Back to dashboard">←</a>
+    <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" style="height:24px;width:auto"/>
+    <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+    <span class="text-sm font-semibold text-gray-700" id="page-title">Associate Performance</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <div id="user-chip" class="text-xs text-gray-500"></div>
+    <button onclick="signOut()" class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition" style="border-radius:4px;background:none;cursor:pointer">Sign out</button>
+  </div>
+</header>
+
+<main style="max-width:900px;margin:0 auto;padding:28px 24px 64px">
+  <p id="page-sub" class="text-xs text-gray-500 mb-4">Performance rolled up per associate from completed audits.</p>
+  <div id="associates-list"><p class="text-xs text-gray-400">Loading…</p></div>
+</main>
+
+<script>
+let _associatesCache = [];
+let CURRENT_USER = null;
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+function _assocScoreClass(score) {
+  if (score == null) return '';
+  if (score >= 75) return 'good';
+  if (score >= 55) return 'avg';
+  return 'bad';
+}
+
+function renderAssociateCard(a, i, expanded) {
+  const scoreCls = _assocScoreClass(a.average_score);
+  let trendBit = '';
+  if (a.improvement != null) {
+    if (a.improvement > 0.5)       trendBit = `<span style="color:#16a34a">▲ ${a.improvement.toFixed(1)}</span>`;
+    else if (a.improvement < -0.5) trendBit = `<span style="color:#dc2626">▼ ${Math.abs(a.improvement).toFixed(1)}</span>`;
+    else                           trendBit = `<span style="color:#9ca3af">steady</span>`;
+  }
+  const gradeBits = Object.entries(a.grade_distribution || {}).map(([g,n]) => `${g}×${n}`).join('  ');
+  const name = a.is_unassigned ? 'Unassigned (no Lead Owner on file)' : escapeHtml(a.associate);
+  const scoreText = a.average_score != null ? a.average_score.toFixed(1) : '—';
+  return `
+    <div class="assoc-card">
+      <div class="assoc-card-head">
+        <div>
+          <div class="assoc-name">${name}</div>
+          <div class="assoc-meta">${a.sessions} session${a.sessions===1?'':'s'} · ${gradeBits || 'no grades'} · last ${escapeHtml((a.last_session_date||'').slice(0,10))}</div>
+        </div>
+        <div>
+          <div class="assoc-score ${scoreCls}">${scoreText}</div>
+          <div class="text-[11px]" style="text-align:right">${trendBit}</div>
+        </div>
+      </div>
+      ${expanded
+        ? `<div class="assoc-detail" id="assoc-detail-${i}"><p class="text-xs text-gray-400">Loading…</p></div>`
+        : `<button class="assoc-trend-toggle" onclick="toggleAssociateDetail(${i}, this)">Show history ▾</button><div class="assoc-detail hidden" id="assoc-detail-${i}"></div>`}
+    </div>`;
+}
+
+async function toggleAssociateDetail(i, btn) {
+  const box = document.getElementById(`assoc-detail-${i}`);
+  if (btn) {
+    if (!box.classList.contains('hidden')) { box.classList.add('hidden'); btn.textContent = 'Show history ▾'; return; }
+    btn.textContent = 'Hide history ▴';
+    box.classList.remove('hidden');
+  }
+  if (box.dataset.loaded) return;
+  box.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>';
+
+  const a = _associatesCache[i];
+  try {
+    const res = await fetch(`/api/v1/associates/${encodeURIComponent(a.associate)}`);
+    if (!res.ok) throw new Error(await res.text());
+    const d = await res.json();
+    let html = '';
+    if (d.trend && d.trend.length) {
+      html += '<div class="assoc-detail-label">Session history — click to open</div>';
+      html += d.trend.slice().reverse().map(t => t.session_id
+        ? `<a class="assoc-row" style="text-decoration:none;cursor:pointer" href="/static/audit-detail.html?session_id=${encodeURIComponent(t.session_id)}&label=${encodeURIComponent(d.associate||'')}"><span>${escapeHtml(t.date)}</span><span class="mono">${t.score != null ? t.score.toFixed(1) : '—'} ›</span></a>`
+        : `<div class="assoc-row"><span>${escapeHtml(t.date)}</span><span class="mono">${t.score != null ? t.score.toFixed(1) : '—'}</span></div>`
+      ).join('');
+    }
+    if (d.strongest_categories && d.strongest_categories.length) {
+      html += '<div class="assoc-detail-label">Strongest</div>';
+      html += d.strongest_categories.map(c =>
+        `<div class="assoc-row"><span>${escapeHtml(c)}</span><span class="mono">${d.category_breakdown[c].average.toFixed(1)}</span></div>`
+      ).join('');
+    }
+    if (d.weakest_categories && d.weakest_categories.length) {
+      html += '<div class="assoc-detail-label">Needs work</div>';
+      html += d.weakest_categories.map(c =>
+        `<div class="assoc-row"><span>${escapeHtml(c)}</span><span class="mono">${d.category_breakdown[c].average.toFixed(1)}</span></div>`
+      ).join('');
+    }
+    box.innerHTML = html || '<p class="text-xs text-gray-400">No detail available yet.</p>';
+    box.dataset.loaded = '1';
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500">Could not load detail: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function loadAssociatesList() {
+  const box = document.getElementById('associates-list');
+  box.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>';
+  try {
+    const res = await fetch('/api/v1/associates');
+    const { associates } = await res.json();
+    _associatesCache = associates || [];
+    if (!_associatesCache.length) {
+      box.innerHTML = '<p class="text-xs text-gray-400">No completed audits yet.</p>';
+      return;
+    }
+    box.innerHTML = _associatesCache.map((a, i) => renderAssociateCard(a, i, false)).join('');
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500">Could not load associates: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function loadSelfView(associateName) {
+  const box = document.getElementById('associates-list');
+  document.getElementById('page-title').textContent = 'My Performance';
+  document.getElementById('page-sub').textContent = 'Your audit history, score trend, and category breakdown.';
+  if (!associateName) {
+    box.innerHTML = '<p class="text-xs text-gray-400">Your account isn\'t linked to an associate name yet — ask an admin to set it under Manage Users so your audits show up here.</p>';
+    return;
+  }
+  try {
+    const res = await fetch(`/api/v1/associates/${encodeURIComponent(associateName)}`);
+    if (res.status === 404) {
+      box.innerHTML = '<p class="text-xs text-gray-400">No completed audits found for you yet.</p>';
+      return;
+    }
+    if (!res.ok) throw new Error(await res.text());
+    const d = await res.json();
+    _associatesCache = [d];
+    box.innerHTML = renderAssociateCard(d, 0, true);
+    toggleAssociateDetail(0, null);
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500">Could not load your performance: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function boot() {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  CURRENT_USER = await res.json();
+  document.getElementById('user-chip').textContent = `${CURRENT_USER.name} · ${CURRENT_USER.role}`;
+
+  const selfMode = CURRENT_USER.role !== 'admin' || new URLSearchParams(location.search).get('me') === '1';
+  if (selfMode) {
+    await loadSelfView(CURRENT_USER.associate_name);
+  } else {
+    await loadAssociatesList();
+  }
+}
+boot();
+</script>
+</body>
+</html>

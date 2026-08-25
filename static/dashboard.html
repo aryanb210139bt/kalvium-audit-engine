@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit — Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  * { font-family:'Inter',sans-serif; }
+  :root { --k-red:#E8192C; --k-red-dark:#c1121f; --k-red-light:#fff5f4; }
+  body { margin:0; background:#fafafa; color:#111827; }
+
+  header { border-bottom:1px solid #f0f0f0; background:#fff; }
+
+  .hero { background:#fff; background-image:radial-gradient(circle,#e5e7eb 1px,transparent 1px); background-size:22px 22px; padding:56px 24px 40px; text-align:center; border-bottom:1px solid #f0f0f0; }
+
+  .group-title { font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; color:#9ca3af; margin-bottom:12px; }
+
+  .mod-card {
+    display:flex; align-items:flex-start; gap:12px; padding:16px; border:1px solid #eceef1;
+    border-radius:8px; background:#fff; cursor:pointer; transition:all .15s; text-decoration:none; color:inherit;
+  }
+  .mod-card:hover { border-color:var(--k-red); box-shadow:0 2px 12px rgba(0,0,0,.05); transform:translateY(-1px); }
+  .mod-card.soon { cursor:default; opacity:.6; }
+  .mod-card.soon:hover { border-color:#eceef1; box-shadow:none; transform:none; }
+  .mod-icon { width:38px; height:38px; border-radius:8px; background:var(--k-red-light); color:var(--k-red); display:flex; align-items:center; justify-content:center; font-size:18px; flex-shrink:0; }
+  .mod-name { font-size:13.5px; font-weight:700; color:#111827; }
+  .mod-desc { font-size:11.5px; color:#9ca3af; margin-top:2px; line-height:1.4; }
+  .mod-badge { font-size:9px; font-weight:700; letter-spacing:.04em; text-transform:uppercase; background:#f3f4f6; color:#9ca3af; padding:2px 6px; border-radius:99px; margin-top:6px; display:inline-block; }
+
+  .grid-mods { display:grid; grid-template-columns:repeat(auto-fill,minmax(220px,1fr)); gap:12px; }
+</style>
+</head>
+<body>
+
+<header class="flex items-center justify-between px-6" style="height:56px">
+  <div class="flex items-center gap-3">
+    <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" style="height:24px;width:auto"/>
+    <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+    <span class="text-sm font-semibold text-gray-700">Demo Audit</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <div id="user-chip" class="flex items-center gap-2 text-xs text-gray-500"></div>
+    <button onclick="signOut()" class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition" style="border-radius:4px;background:none;cursor:pointer">Sign out</button>
+  </div>
+</header>
+
+<div class="hero">
+  <h1 class="text-2xl font-bold text-gray-900 mb-1" id="hero-greeting">Hey, welcome to Kalvium Demo Audit</h1>
+  <p class="text-sm text-gray-400" id="hero-sub">Everything you need to run and review demo call audits.</p>
+</div>
+
+<main style="max-width:1040px;margin:0 auto;padding:32px 24px 64px">
+  <p class="group-title">Your modules</p>
+  <div id="mods-primary" class="grid-mods mb-8"></div>
+
+  <div id="mods-admin-section" class="hidden">
+    <p class="group-title">Admin</p>
+    <div id="mods-admin" class="grid-mods"></div>
+  </div>
+</main>
+
+<script>
+let CURRENT_USER = null;
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function modCard({icon, name, desc, href, soon}) {
+  const badge = soon ? '<span class="mod-badge">Coming soon</span>' : '';
+  const tag = soon ? 'div' : 'a';
+  const hrefAttr = soon ? '' : `href="${href}"`;
+  const onclick = soon ? `onclick="alert('${escapeHtml(name)} is on the roadmap — not built yet.')"` : '';
+  return `<${tag} ${hrefAttr} ${onclick} class="mod-card ${soon ? 'soon' : ''}">
+    <div class="mod-icon">${icon}</div>
+    <div>
+      <div class="mod-name">${escapeHtml(name)}</div>
+      <div class="mod-desc">${escapeHtml(desc)}</div>
+      ${badge}
+    </div>
+  </${tag}>`;
+}
+
+async function boot() {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  CURRENT_USER = await res.json();
+
+  document.getElementById('user-chip').innerHTML = `
+    <span class="font-semibold text-gray-700">${escapeHtml(CURRENT_USER.name)}</span>
+    <span style="background:#f3f4f6;color:#6b7280;font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 7px;border-radius:99px">${escapeHtml(CURRENT_USER.role)}</span>
+  `;
+  document.getElementById('hero-greeting').textContent = `Hey ${CURRENT_USER.name}, welcome back`;
+
+  const primary = document.getElementById('mods-primary');
+
+  if (CURRENT_USER.role === 'admin') {
+    document.getElementById('hero-sub').textContent = 'Run new audits, review history, and track every associate\'s performance.';
+    primary.innerHTML = [
+      modCard({icon:'🎙️', name:'New Audit', desc:'Upload a recording and run the full AI audit.', href:'/static/audit.html'}),
+      modCard({icon:'🕓', name:'Audit History', desc:'Every upload, download, and tracker push — full activity trail.', href:'/static/history.html'}),
+      modCard({icon:'👥', name:'Associate Performance', desc:'Score trends, strengths and weaknesses, per associate.', href:'/static/associates.html'}),
+      modCard({icon:'💡', name:'Kalvium Intelligence', desc:'AI-generated tips for a better pitch, drawn from your audit history.', soon:true}),
+      modCard({icon:'🤖', name:'Kalvium GPT', desc:'Ask sales questions, answered from a Kalvium-trained perspective.', soon:true}),
+    ].join('');
+
+    document.getElementById('mods-admin-section').classList.remove('hidden');
+    document.getElementById('mods-admin').innerHTML = [
+      modCard({icon:'🔐', name:'Manage Users', desc:'Grant access — create accounts, assign roles.', href:'/static/manage-users.html'}),
+    ].join('');
+  } else {
+    document.getElementById('hero-sub').textContent = 'Your audits, scores, and coaching in one place.';
+    primary.innerHTML = [
+      modCard({icon:'📊', name:'My Performance', desc:'Your audit history, score trend, and category breakdown.', href:`/static/associates.html?me=1`}),
+      modCard({icon:'💡', name:'Kalvium Intelligence', desc:'AI-generated tips for a better pitch.', soon:true}),
+      modCard({icon:'🤖', name:'Kalvium GPT', desc:'Ask sales questions, answered from a Kalvium-trained perspective.', soon:true}),
+    ].join('');
+  }
+}
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+boot();
+</script>
+</body>
+</html>

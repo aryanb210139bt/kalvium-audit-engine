@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit — Manage Users</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+  * { font-family:'Inter',sans-serif; }
+  :root { --k-red:#E8192C; --k-red-dark:#c1121f; }
+  body { margin:0; background:#fafafa; color:#111827; }
+  header { border-bottom:1px solid #f0f0f0; background:#fff; }
+  .card { background:#fff;border:1px solid #eceef1;border-radius:8px;padding:20px; }
+  .k-input { width:100%;background:#fafafa;border:1px solid #e5e7eb;border-radius:4px;padding:8px 11px;font-size:12px;color:#111827;outline:none; }
+  .k-input:focus { border-color:var(--k-red);background:#fff;box-shadow:0 0 0 3px rgba(232,25,44,0.10); }
+  .btn-primary { background:var(--k-red);color:#fff;font-size:12px;font-weight:600;padding:9px 16px;border-radius:4px;border:none;cursor:pointer; }
+  .btn-primary:hover { background:var(--k-red-dark); }
+  .btn-secondary { background:#fff;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;font-weight:500;padding:6px 12px;border-radius:4px;cursor:pointer; }
+  .btn-secondary:hover { border-color:var(--k-red);color:var(--k-red); }
+
+  table { width:100%;border-collapse:collapse;font-size:12.5px; }
+  th { text-align:left;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#9ca3af;font-weight:700;padding:8px 10px;border-bottom:1px solid #f0f0f0; }
+  td { padding:10px;border-bottom:1px solid #f6f7f8;vertical-align:middle; }
+  .role-badge { font-size:10px;font-weight:700;text-transform:uppercase;padding:2px 8px;border-radius:99px; }
+  .role-badge.admin { background:#fee2e2;color:#b91c1c; }
+  .role-badge.associate { background:#dbeafe;color:#1d4ed8; }
+  .status-dot { width:7px;height:7px;border-radius:50%;display:inline-block;margin-right:5px; }
+  .status-dot.active { background:#16a34a; } .status-dot.disabled { background:#d1d5db; }
+  .roster-item { display:flex;align-items:center;justify-content:space-between;gap:6px;font-size:12px;padding:6px 9px;background:#fafafa;border:1px solid #f0f0f0;border-radius:5px; }
+  .roster-remove { color:#d1d5db;cursor:pointer;font-size:13px;line-height:1;flex-shrink:0; }
+  .roster-remove:hover { color:#dc2626; }
+</style>
+</head>
+<body>
+
+<header class="flex items-center justify-between px-6" style="height:56px">
+  <div class="flex items-center gap-3">
+    <a href="/static/dashboard.html" class="text-gray-400 hover:text-gray-700" title="Back to dashboard">←</a>
+    <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" style="height:24px;width:auto"/>
+    <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+    <span class="text-sm font-semibold text-gray-700">Manage Users</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <div id="user-chip" class="text-xs text-gray-500"></div>
+    <button onclick="signOut()" class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition" style="border-radius:4px;background:none;cursor:pointer">Sign out</button>
+  </div>
+</header>
+
+<main style="max-width:900px;margin:0 auto;padding:28px 24px 64px">
+  <div class="card mb-5">
+    <p class="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wide" style="font-size:11px">Grant access</p>
+    <div class="grid grid-cols-2 gap-3 mb-3">
+      <div><label class="block text-[11px] font-semibold text-gray-500 mb-1">Name</label><input id="nu-name" class="k-input" placeholder="Priya Sharma"/></div>
+      <div><label class="block text-[11px] font-semibold text-gray-500 mb-1">Email</label><input id="nu-email" type="email" class="k-input" placeholder="priya@kalvium.com"/></div>
+      <div><label class="block text-[11px] font-semibold text-gray-500 mb-1">Temporary password</label><input id="nu-password" class="k-input" placeholder="At least 8 characters"/></div>
+      <div><label class="block text-[11px] font-semibold text-gray-500 mb-1">Role</label>
+        <select id="nu-role" class="k-input" onchange="toggleAssocField()">
+          <option value="associate">Associate — sees only their own audits</option>
+          <option value="admin">Admin — sees and manages everything</option>
+        </select>
+      </div>
+    </div>
+    <div id="nu-assoc-wrap" class="mb-3">
+      <label class="block text-[11px] font-semibold text-gray-500 mb-1">Associate name (must match "Lead Owner" on their audits)</label>
+      <input id="nu-assoc" class="k-input" placeholder="Priya Sharma"/>
+    </div>
+    <button class="btn-primary" onclick="createUser()">Create account</button>
+    <p id="nu-status" class="text-[11px] mt-2"></p>
+  </div>
+
+  <div class="card mb-5">
+    <p class="text-xs font-bold text-gray-700 mb-3 uppercase tracking-wide" style="font-size:11px">All accounts</p>
+    <div style="overflow-x:auto">
+      <table>
+        <thead><tr><th>Name</th><th>Email</th><th>Role</th><th>Associate link</th><th>Status</th><th>Last login</th><th></th></tr></thead>
+        <tbody id="users-tbody"><tr><td colspan="7" class="text-gray-400 text-xs">Loading…</td></tr></tbody>
+      </table>
+    </div>
+  </div>
+
+  <div class="card">
+    <p class="text-xs font-bold text-gray-700 mb-1 uppercase tracking-wide" style="font-size:11px">Associate roster</p>
+    <p class="text-[11px] text-gray-500 mb-3">The master list everyone picks from while auditing — "Lead Owner" and batch-link labels are restricted to these names, so audits don't fragment across misspellings.</p>
+    <div class="flex gap-2 mb-4">
+      <input id="roster-new-name" class="k-input" placeholder="Full name — e.g. Priya Sharma" onkeydown="if(event.key==='Enter') addRosterName()"/>
+      <button class="btn-primary" style="width:auto;padding:9px 16px;white-space:nowrap" onclick="addRosterName()">Add to roster</button>
+    </div>
+    <p id="roster-status" class="text-[11px] mb-3"></p>
+    <div id="roster-list" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(200px,1fr));gap:6px">
+      <p class="text-xs text-gray-400">Loading…</p>
+    </div>
+  </div>
+</main>
+
+<script>
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+function toggleAssocField() {
+  const role = document.getElementById('nu-role').value;
+  document.getElementById('nu-assoc-wrap').style.display = role === 'associate' ? 'block' : 'none';
+}
+
+async function createUser() {
+  const name = document.getElementById('nu-name').value.trim();
+  const email = document.getElementById('nu-email').value.trim();
+  const password = document.getElementById('nu-password').value;
+  const role = document.getElementById('nu-role').value;
+  const associate_name = document.getElementById('nu-assoc').value.trim();
+  const statusEl = document.getElementById('nu-status');
+
+  if (!name || !email || !password) {
+    statusEl.textContent = 'Name, email, and a password are required.';
+    statusEl.style.color = '#dc2626';
+    return;
+  }
+  if (password.length < 8) {
+    statusEl.textContent = 'Password must be at least 8 characters.';
+    statusEl.style.color = '#dc2626';
+    return;
+  }
+  try {
+    const res = await fetch('/api/v1/admin/users', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name, email, password, role, associate_name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to create account');
+    statusEl.textContent = `✓ Account created for ${email}`;
+    statusEl.style.color = '#16a34a';
+    document.getElementById('nu-name').value = '';
+    document.getElementById('nu-email').value = '';
+    document.getElementById('nu-password').value = '';
+    document.getElementById('nu-assoc').value = '';
+    loadUsers();
+  } catch (e) {
+    statusEl.textContent = e.message;
+    statusEl.style.color = '#dc2626';
+  }
+}
+
+async function toggleStatus(userId, currentStatus) {
+  const next = currentStatus === 'active' ? 'disabled' : 'active';
+  await fetch(`/api/v1/admin/users/${userId}`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ status: next }),
+  });
+  loadUsers();
+}
+
+async function resetPassword(userId, email) {
+  const pw = window.prompt(`New password for ${email} (at least 8 characters):`);
+  if (!pw) return;
+  if (pw.length < 8) { alert('Password must be at least 8 characters.'); return; }
+  const res = await fetch(`/api/v1/admin/users/${userId}`, {
+    method: 'PATCH', headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ password: pw }),
+  });
+  if (res.ok) alert('Password reset.'); else alert('Failed to reset password.');
+}
+
+function renderUserRow(u) {
+  const assocLink = u.role === 'associate' ? (escapeHtml(u.associate_name) || '<span style="color:#d1d5db">not linked</span>') : '—';
+  const lastLogin = u.last_login_at ? escapeHtml(u.last_login_at.replace('T',' ').slice(0,16)) : 'never';
+  return `<tr>
+    <td class="font-medium">${escapeHtml(u.name)}</td>
+    <td class="text-gray-500">${escapeHtml(u.email)}</td>
+    <td><span class="role-badge ${u.role}">${escapeHtml(u.role)}</span></td>
+    <td class="text-gray-500">${assocLink}</td>
+    <td><span class="status-dot ${u.status}"></span>${escapeHtml(u.status)}</td>
+    <td class="text-gray-400">${lastLogin}</td>
+    <td class="text-right whitespace-nowrap">
+      <button class="btn-secondary" onclick="resetPassword('${u.user_id}','${escapeHtml(u.email)}')">Reset password</button>
+      <button class="btn-secondary" onclick="toggleStatus('${u.user_id}','${u.status}')">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+    </td>
+  </tr>`;
+}
+
+async function loadUsers() {
+  const tbody = document.getElementById('users-tbody');
+  try {
+    const res = await fetch('/api/v1/admin/users');
+    const { users } = await res.json();
+    tbody.innerHTML = users.map(renderUserRow).join('');
+  } catch (e) {
+    tbody.innerHTML = `<tr><td colspan="7" class="text-red-500 text-xs">Could not load users: ${escapeHtml(String(e))}</td></tr>`;
+  }
+}
+
+function renderRoster(names) {
+  const box = document.getElementById('roster-list');
+  if (!names.length) { box.innerHTML = '<p class="text-xs text-gray-400">No associates on the roster yet.</p>'; return; }
+  box.innerHTML = names.map(n => `
+    <div class="roster-item">
+      <span>${escapeHtml(n)}</span>
+      <span class="roster-remove" onclick="removeRosterName('${escapeHtml(n).replace(/'/g,"\\'")}')" title="Remove from roster">✕</span>
+    </div>`).join('');
+}
+
+async function loadRoster() {
+  try {
+    const res = await fetch('/api/v1/associate-roster');
+    const { names } = await res.json();
+    renderRoster(names);
+  } catch (e) {
+    document.getElementById('roster-list').innerHTML = `<p class="text-xs text-red-500">Could not load roster: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function addRosterName() {
+  const input = document.getElementById('roster-new-name');
+  const name = input.value.trim();
+  const statusEl = document.getElementById('roster-status');
+  if (!name) return;
+  try {
+    const res = await fetch('/api/v1/associate-roster', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ name }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to add');
+    input.value = '';
+    statusEl.textContent = `✓ Added "${name}"`;
+    statusEl.style.color = '#16a34a';
+    renderRoster(data.names);
+  } catch (e) {
+    statusEl.textContent = e.message;
+    statusEl.style.color = '#dc2626';
+  }
+}
+
+async function removeRosterName(name) {
+  if (!confirm(`Remove "${name}" from the roster? Past audits already tagged with this name are unaffected.`)) return;
+  try {
+    const res = await fetch(`/api/v1/associate-roster/${encodeURIComponent(name)}`, { method: 'DELETE' });
+    const data = await res.json();
+    renderRoster(data.names);
+  } catch (e) { alert('Could not remove: ' + e.message); }
+}
+
+async function boot() {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  const user = await res.json();
+  if (user.role !== 'admin') { window.location.href = '/static/dashboard.html'; return; }
+  document.getElementById('user-chip').textContent = `${user.name} · admin`;
+  toggleAssocField();
+  loadUsers();
+  loadRoster();
+}
+boot();
+</script>
+</body>
+</html>

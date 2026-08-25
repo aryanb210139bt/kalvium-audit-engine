@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit — History &amp; Dashboard</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { font-family:'Inter',sans-serif; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  :root { --k-red:#E8192C; --k-red-light:#fef1f2; }
+  body { margin:0; background:#fafafa; color:#111827; }
+  header { border-bottom:1px solid #f0f0f0; background:#fff; }
+  .k-input { background:#fafafa;border:1px solid #e5e7eb;border-radius:4px;padding:7px 11px;font-size:12px;color:#111827;outline:none;transition:all .15s; }
+  .k-input:focus { border-color:var(--k-red);background:#fff;box-shadow:0 0 0 3px rgba(232,25,44,0.10); }
+  .card { background:#fff;border:1px solid #eceef1;border-radius:10px; }
+  .sec-title { font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:#6b7280; }
+  .tab-link { font-size:11px;color:#9ca3af;text-decoration:none;cursor:pointer; }
+  .tab-link:hover { color:#374151; }
+
+  /* ── Carousel ─────────────────────────────────────────────────────── */
+  .carousel-wrap { position:relative; }
+  .carousel-track {
+    display:flex; gap:14px; overflow-x:auto; overflow-y:hidden; scroll-snap-type:x proximity;
+    padding:2px 2px 14px 2px; cursor:grab; scrollbar-width:thin; scrollbar-color:transparent transparent;
+    transition:scrollbar-color .2s;
+  }
+  .carousel-track:active { cursor:grabbing; }
+  .carousel-wrap:hover .carousel-track { scrollbar-color:#d1d5db transparent; }
+  .carousel-track::-webkit-scrollbar { height:6px; }
+  .carousel-track::-webkit-scrollbar-thumb { background:transparent; border-radius:99px; }
+  .carousel-wrap:hover .carousel-track::-webkit-scrollbar-thumb { background:#d1d5db; }
+  .carousel-track::-webkit-scrollbar-track { background:transparent; }
+
+  .carousel-arrow {
+    position:absolute; top:50%; transform:translateY(-50%); z-index:5; width:30px; height:30px;
+    border-radius:50%; border:1px solid #e5e7eb; background:#fff; color:#374151; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; font-size:15px; box-shadow:0 2px 6px rgba(0,0,0,0.08);
+    opacity:0; transition:opacity .15s;
+  }
+  .carousel-wrap:hover .carousel-arrow { opacity:1; }
+  .carousel-arrow.left { left:-14px; } .carousel-arrow.right { right:-14px; }
+  .carousel-arrow:hover { border-color:var(--k-red); color:var(--k-red); }
+
+  /* ── Compact audit card ───────────────────────────────────────────── */
+  .audit-card { flex:0 0 340px; width:340px; min-width:0; scroll-snap-align:start; padding:14px 15px; display:flex; flex-direction:column; gap:9px; }
+  .audit-card * { min-width:0; }
+  .audit-card-head { display:flex; justify-content:space-between; align-items:flex-start; gap:8px; }
+  .audit-card-head-main { flex:1; min-width:0; }
+  .audit-assoc { font-size:13px; font-weight:700; color:#111827; line-height:1.25; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .audit-meta { font-size:10px; color:#9ca3af; margin-top:2px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .audit-score-badge { display:flex; align-items:center; gap:6px; flex-shrink:0; }
+  .audit-score-num { font-family:'JetBrains Mono',monospace; font-size:20px; font-weight:800; line-height:1; }
+  .audit-grade-pill { font-size:10px; font-weight:800; padding:2px 6px; border-radius:99px; }
+  .cat-mini-row { display:flex; align-items:center; gap:6px; font-size:9.5px; }
+  .cat-mini-label { width:96px; flex-shrink:0; color:#6b7280; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .cat-mini-track { flex:1; height:4px; background:#f3f4f6; border-radius:99px; overflow:hidden; }
+  .cat-mini-fill { height:100%; border-radius:99px; }
+  .cat-mini-val { width:22px; text-align:right; font-family:'JetBrains Mono',monospace; color:#374151; flex-shrink:0; }
+  .sw-col { font-size:10.5px; }
+  .sw-col-title { font-size:9px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; margin-bottom:3px; }
+  .sw-item { color:#4b5563; line-height:1.35; margin-bottom:3px; display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .audit-card-footer { display:flex; gap:5px; margin-top:auto; padding-top:6px; border-top:1px solid #f3f4f6; }
+  .footer-link { font-size:9.5px; color:#6b7280; text-decoration:none; border:1px solid #e5e7eb; border-radius:4px; padding:3px 6px; flex:1; text-align:center; }
+  .footer-link:hover { border-color:var(--k-red); color:var(--k-red); }
+  .footer-link.primary { background:#111827; color:#fff; border-color:#111827; }
+  .footer-link.primary:hover { background:var(--k-red); border-color:var(--k-red); color:#fff; }
+
+  /* ── Dashboard ────────────────────────────────────────────────────── */
+  .kpi-grid { display:grid; grid-template-columns:repeat(6,1fr); gap:10px; }
+  .kpi-card { padding:12px 14px; }
+  .kpi-label { font-size:9.5px; font-weight:600; letter-spacing:.03em; text-transform:uppercase; color:#9ca3af; margin-bottom:3px; }
+  .kpi-value { font-family:'JetBrains Mono',monospace; font-size:19px; font-weight:800; color:#111827; }
+  .kpi-sub { font-size:10px; color:#9ca3af; margin-top:1px; }
+
+  .dash-row2 { display:grid; grid-template-columns:1.3fr 1fr; gap:14px; }
+  .catperf-row { display:flex; align-items:center; gap:8px; font-size:11px; padding:3px 0; }
+  .catperf-label { width:150px; flex-shrink:0; color:#374151; }
+  .catperf-track { flex:1; height:6px; background:#f3f4f6; border-radius:99px; overflow:hidden; }
+  .catperf-fill { height:100%; border-radius:99px; }
+  .catperf-val { width:32px; text-align:right; font-family:'JetBrains Mono',monospace; font-size:11px; color:#111827; flex-shrink:0; }
+
+  .trend-sparkline { width:100%; height:56px; }
+
+  @media (max-width: 1100px) {
+    .kpi-grid { grid-template-columns:repeat(3,1fr); }
+    .dash-row2 { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+
+<header class="flex items-center justify-between px-6" style="height:56px">
+  <div class="flex items-center gap-3">
+    <a href="/static/dashboard.html" class="text-gray-400 hover:text-gray-700" title="Back to dashboard">←</a>
+    <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" style="height:24px;width:auto"/>
+    <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+    <span class="text-sm font-semibold text-gray-700">Audit History &amp; Dashboard</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <a class="tab-link" onclick="toggleActivityFeed()">Raw Activity Feed</a>
+    <div id="user-chip" class="text-xs text-gray-500"></div>
+    <button onclick="signOut()" class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition" style="border-radius:4px;background:none;cursor:pointer">Sign out</button>
+  </div>
+</header>
+
+<main style="max-width:1400px;margin:0 auto;padding:22px 28px 60px">
+
+  <!-- ═══ SECTION 1 — AUDIT HISTORY (horizontal carousel) ═══ -->
+  <section class="mb-7">
+    <div class="flex items-center justify-between mb-3">
+      <p class="sec-title">Audit History</p>
+      <input id="search-box" type="text" placeholder="Search associate or session ID…" class="k-input" style="width:220px" oninput="debounceSearch()"/>
+    </div>
+    <div class="carousel-wrap">
+      <button class="carousel-arrow left" onclick="scrollCarousel(-1)">‹</button>
+      <div id="carousel-track" class="carousel-track"><p class="text-xs text-gray-400 p-3">Loading…</p></div>
+      <button class="carousel-arrow right" onclick="scrollCarousel(1)">›</button>
+    </div>
+  </section>
+
+  <!-- ═══ SECTION 2 — AUDIT DASHBOARD ═══ -->
+  <section>
+    <p class="sec-title mb-3">Audit Dashboard</p>
+
+    <!-- Row 1: KPIs -->
+    <div id="kpi-grid" class="kpi-grid mb-4"></div>
+
+    <!-- Row 2: Category Performance + Strengths/Improvements -->
+    <div class="dash-row2 mb-4">
+      <div class="card" style="padding:14px 16px">
+        <p class="sec-title mb-2">Category Performance</p>
+        <div id="catperf-list"></div>
+      </div>
+      <div class="card" style="padding:14px 16px">
+        <p class="sec-title mb-2">Strengths vs Areas to Improve</p>
+        <div class="grid grid-cols-2 gap-3">
+          <div>
+            <div class="sw-col-title" style="color:#16a34a">Strengths</div>
+            <div id="dash-strengths"></div>
+          </div>
+          <div>
+            <div class="sw-col-title" style="color:var(--k-red)">To Improve</div>
+            <div id="dash-improvements"></div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Row 3: Trends -->
+    <div class="card" style="padding:14px 16px">
+      <p class="sec-title mb-2">Trends</p>
+      <div class="grid grid-cols-4 gap-4 items-center">
+        <div class="col-span-1">
+          <div class="kpi-label">Recent vs Previous</div>
+          <div id="trend-comparison" class="text-sm font-semibold"></div>
+        </div>
+        <div class="col-span-3">
+          <svg id="trend-svg" class="trend-sparkline" viewBox="0 0 600 56" preserveAspectRatio="none"></svg>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- Secondary: Raw Activity Feed (collapsed by default) -->
+  <section id="activity-section" class="hidden mt-7">
+    <p class="sec-title mb-3">Raw Activity Feed</p>
+    <div class="card" style="padding:8px">
+      <div id="events-list"><p class="text-xs text-gray-400 p-3">Loading…</p></div>
+    </div>
+  </section>
+
+</main>
+
+<script>
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function scoreColor(s) { return s >= 75 ? '#16a34a' : s >= 55 ? '#d97706' : '#dc2626'; }
+function gradeColors(g) {
+  g = (g || '').replace('+','');
+  if (g === 'A') return ['#dcfce7','#15803d'];
+  if (g === 'B') return ['#fef3c7','#a16207'];
+  if (g === 'C') return ['#fed7aa','#c2410c'];
+  return ['#fee2e2','#b91c1c'];
+}
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+function toggleActivityFeed() {
+  const sec = document.getElementById('activity-section');
+  sec.classList.toggle('hidden');
+  if (!sec.classList.contains('hidden')) loadEvents();
+}
+
+let _allAudits = [];
+
+// ── Carousel controls ───────────────────────────────────────────────────
+function scrollCarousel(dir) {
+  const track = document.getElementById('carousel-track');
+  track.scrollBy({ left: dir * 370, behavior: 'smooth' });
+}
+
+function wireCarouselInteractions() {
+  const track = document.getElementById('carousel-track');
+  // Mouse-wheel: plain vertical wheel scrolls the carousel horizontally
+  // while hovering it, instead of scrolling the page.
+  track.addEventListener('wheel', (e) => {
+    if (Math.abs(e.deltaY) > Math.abs(e.deltaX)) {
+      e.preventDefault();
+      track.scrollLeft += e.deltaY;
+    }
+  }, { passive: false });
+
+  // Click-and-drag panning.
+  let isDown = false, startX = 0, startScroll = 0;
+  track.addEventListener('mousedown', (e) => {
+    isDown = true; startX = e.pageX; startScroll = track.scrollLeft;
+  });
+  window.addEventListener('mouseup', () => { isDown = false; });
+  window.addEventListener('mousemove', (e) => {
+    if (!isDown) return;
+    e.preventDefault();
+    track.scrollLeft = startScroll - (e.pageX - startX);
+  });
+}
+
+// ── Compact audit card ───────────────────────────────────────────────────
+function renderAuditCard(a) {
+  const [gbg, gfg] = gradeColors(a.grade);
+  const score = a.overall_score != null ? a.overall_score.toFixed(1) : '—';
+  const dur = a.duration_seconds ? `${Math.floor(a.duration_seconds/60)}m ${Math.round(a.duration_seconds%60)}s` : '';
+  const detailHref = `/static/audit-detail.html?session_id=${encodeURIComponent(a.session_id)}&label=${encodeURIComponent(a.label||'')}`;
+
+  const cats = Object.values(a.category_scores || {});
+  const catsHtml = cats.slice(0, 9).map(c => {
+    const raw = c.raw_score ?? 0;
+    return `<div class="cat-mini-row">
+      <span class="cat-mini-label" title="${escapeHtml(c.category||'')}">${escapeHtml(c.category||'')}</span>
+      <div class="cat-mini-track"><div class="cat-mini-fill" style="width:${raw*10}%;background:${scoreColor(raw*10)}"></div></div>
+      <span class="cat-mini-val">${raw.toFixed(1)}</span>
+    </div>`;
+  }).join('');
+
+  const strengths = (a.top_strengths || []).slice(0, 2);
+  const improvements = (a.improvement_areas || []).slice(0, 2);
+
+  return `<div class="card audit-card">
+    <div class="audit-card-head">
+      <div class="audit-card-head-main">
+        <div class="audit-assoc" title="${escapeHtml(a.label || 'Unlabeled')}">${escapeHtml(a.label || 'Unlabeled')}</div>
+        <div class="audit-meta">${escapeHtml((a.date||'').replace('T',' ').slice(0,16))} · ${dur} · <span class="mono">${escapeHtml((a.session_id||'').slice(0,8))}</span></div>
+      </div>
+      <div class="audit-score-badge">
+        <span class="audit-grade-pill" style="background:${gbg};color:${gfg}">${escapeHtml(a.grade || '—')}</span>
+        <span class="audit-score-num" style="color:${scoreColor(a.overall_score||0)}">${score}</span>
+      </div>
+    </div>
+
+    ${catsHtml ? `<div>${catsHtml}</div>` : '<p class="text-[10px] text-gray-300">No category breakdown</p>'}
+
+    ${(strengths.length || improvements.length) ? `<div class="grid grid-cols-2 gap-2 sw-col">
+      <div>
+        <div class="sw-col-title" style="color:#16a34a">Strengths</div>
+        ${strengths.map(s => `<div class="sw-item">${escapeHtml(s)}</div>`).join('') || '<div class="text-gray-300">—</div>'}
+      </div>
+      <div>
+        <div class="sw-col-title" style="color:var(--k-red)">To improve</div>
+        ${improvements.map(s => `<div class="sw-item">${escapeHtml(s)}</div>`).join('') || '<div class="text-gray-300">—</div>'}
+      </div>
+    </div>` : ''}
+
+    <div class="audit-card-footer">
+      <a class="footer-link" href="/api/v1/audit/${a.session_id}/download/pdf" target="_blank">PDF</a>
+      <a class="footer-link" href="/api/v1/audit/${a.session_id}/download/excel" target="_blank">Excel</a>
+      <a class="footer-link" href="${detailHref}">Transcript</a>
+      <a class="footer-link primary" href="${detailHref}">Full →</a>
+    </div>
+  </div>`;
+}
+
+function renderAudits() {
+  const track = document.getElementById('carousel-track');
+  const q = document.getElementById('search-box').value.trim().toLowerCase();
+  let rows = _allAudits;
+  if (q) rows = rows.filter(a => (a.label||'').toLowerCase().includes(q) || (a.session_id||'').toLowerCase().includes(q));
+  if (!rows.length) { track.innerHTML = '<p class="text-xs text-gray-400 p-3">No audits found.</p>'; return; }
+  track.innerHTML = rows.map(renderAuditCard).join('');
+}
+
+let _searchDebounce = null;
+function debounceSearch() {
+  clearTimeout(_searchDebounce);
+  _searchDebounce = setTimeout(renderAudits, 250);
+}
+
+async function loadAudits() {
+  const track = document.getElementById('carousel-track');
+  try {
+    const res = await fetch('/api/v1/sessions/history?limit=60&full=true');
+    const { sessions } = await res.json();
+    _allAudits = sessions || [];
+    renderAudits();
+  } catch (e) {
+    track.innerHTML = `<p class="text-xs text-red-500 p-3">Could not load audits: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+// ── Dashboard ────────────────────────────────────────────────────────────
+function renderKpis(d) {
+  const gradeEntries = Object.entries(d.grade_distribution || {});
+  const topGrade = gradeEntries.sort((a,b) => b[1]-a[1])[0]?.[0] || '—';
+  const kpis = [
+    ['Average Score', d.average_score != null ? d.average_score.toFixed(1) : '—', ''],
+    ['Most Common Grade', topGrade, ''],
+    ['Total Audits', d.total_audits ?? 0, ''],
+    ['Strongest Category', (d.strongest_categories||[])[0] || '—', ''],
+    ['Weakest Category', (d.weakest_categories||[])[0] || '—', ''],
+    ['Recent Trend', d.recent_vs_previous ? (d.recent_vs_previous.recent_avg >= d.recent_vs_previous.previous_avg ? '↑ Improving' : '↓ Declining') : '—',
+      d.recent_vs_previous ? `${d.recent_vs_previous.previous_avg} → ${d.recent_vs_previous.recent_avg}` : ''],
+  ];
+  document.getElementById('kpi-grid').innerHTML = kpis.map(([label, value, sub]) => `
+    <div class="card kpi-card">
+      <div class="kpi-label">${escapeHtml(label)}</div>
+      <div class="kpi-value" style="font-size:${String(value).length > 10 ? '14px' : '19px'}">${escapeHtml(String(value))}</div>
+      ${sub ? `<div class="kpi-sub">${escapeHtml(sub)}</div>` : ''}
+    </div>`).join('');
+}
+
+function renderCategoryPerformance(d) {
+  const entries = Object.entries(d.category_breakdown || {}).sort((a,b) => b[1].average - a[1].average);
+  document.getElementById('catperf-list').innerHTML = entries.map(([label, v]) => `
+    <div class="catperf-row">
+      <span class="catperf-label">${escapeHtml(label)}</span>
+      <div class="catperf-track"><div class="catperf-fill" style="width:${v.average*10}%;background:${scoreColor(v.average*10)}"></div></div>
+      <span class="catperf-val">${v.average.toFixed(1)}</span>
+    </div>`).join('') || '<p class="text-xs text-gray-400">No data yet.</p>';
+}
+
+function renderStrengthsImprovements(d) {
+  const s = document.getElementById('dash-strengths');
+  const i = document.getElementById('dash-improvements');
+  s.innerHTML = (d.strongest_categories||[]).map(c => `<div class="sw-item">✓ ${escapeHtml(c)}</div>`).join('') || '<div class="text-gray-300 text-xs">—</div>';
+  i.innerHTML = (d.weakest_categories||[]).map(c => `<div class="sw-item">→ ${escapeHtml(c)}</div>`).join('') || '<div class="text-gray-300 text-xs">—</div>';
+}
+
+function renderTrend(d) {
+  const rvp = d.recent_vs_previous;
+  document.getElementById('trend-comparison').innerHTML = rvp
+    ? `<span style="color:${scoreColor(rvp.recent_avg)}">${rvp.recent_avg}</span> <span class="text-gray-300">vs</span> ${rvp.previous_avg}`
+    : '<span class="text-gray-300">Not enough data</span>';
+
+  const points = (d.trend || []).filter(t => typeof t.score === 'number');
+  const svg = document.getElementById('trend-svg');
+  if (points.length < 2) { svg.innerHTML = '<text x="10" y="30" font-size="11" fill="#d1d5db">Not enough audits yet for a trend line</text>'; return; }
+  const w = 600, h = 56, pad = 4;
+  const max = Math.max(...points.map(p=>p.score), 10), min = Math.min(...points.map(p=>p.score), 0);
+  const range = Math.max(max - min, 1);
+  const stepX = (w - pad*2) / (points.length - 1);
+  const coords = points.map((p, idx) => {
+    const x = pad + idx * stepX;
+    const y = h - pad - ((p.score - min) / range) * (h - pad*2);
+    return [x, y];
+  });
+  const path = coords.map(([x,y], idx) => `${idx===0?'M':'L'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  svg.innerHTML = `<path d="${path}" fill="none" stroke="var(--k-red)" stroke-width="2"/>` +
+    coords.map(([x,y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="var(--k-red)"/>`).join('');
+}
+
+async function loadDashboard() {
+  try {
+    const res = await fetch('/api/v1/dashboard/overview');
+    const d = await res.json();
+    renderKpis(d);
+    renderCategoryPerformance(d);
+    renderStrengthsImprovements(d);
+    renderTrend(d);
+  } catch (e) {
+    document.getElementById('kpi-grid').innerHTML = `<p class="text-xs text-red-500 p-3 col-span-6">Could not load dashboard: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+// ── Raw Activity Feed (secondary, collapsed) ─────────────────────────────
+function renderHistoryEvent(e) {
+  const dotColor = e.event_type === 'audit_failed' ? '#dc2626' : e.event_type === 'audit_completed' ? '#16a34a' : e.event_type === 'pushed_to_tracker' ? '#2563eb' : '#9ca3af';
+  const when = escapeHtml((e.timestamp || '').replace('T', ' ').slice(0, 19));
+  const who = e.actor ? escapeHtml(e.actor) : 'unknown';
+  const assoc = e.associate ? ` · ${escapeHtml(e.associate)}` : '';
+  return `<div style="display:flex;gap:8px;align-items:flex-start;padding:8px 10px;border-top:1px solid #f3f4f6">
+    <span style="width:6px;height:6px;border-radius:50%;background:${dotColor};margin-top:5px;flex-shrink:0"></span>
+    <div style="flex:1;min-width:0">
+      <div style="font-size:12px;font-weight:600;color:#111827">${escapeHtml(e.event_label || e.event_type)}</div>
+      <div style="font-size:10px;color:#9ca3af">${when} · ${who}${assoc}</div>
+    </div>
+  </div>`;
+}
+
+async function loadEvents() {
+  const box = document.getElementById('events-list');
+  box.innerHTML = '<p class="text-xs text-gray-400 p-3">Loading…</p>';
+  try {
+    const res = await fetch('/api/v1/activity?limit=200');
+    const { events } = await res.json();
+    box.innerHTML = (events && events.length) ? events.map(renderHistoryEvent).join('') : '<p class="text-xs text-gray-400 p-3">No activity recorded yet.</p>';
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500 p-3">Could not load activity: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function boot() {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  const user = await res.json();
+  if (user.role !== 'admin') { window.location.href = '/static/dashboard.html'; return; }
+  document.getElementById('user-chip').textContent = `${user.name} · admin`;
+  wireCarouselInteractions();
+  loadAudits();
+  loadDashboard();
+}
+boot();
+</script>
+</body>
+</html>

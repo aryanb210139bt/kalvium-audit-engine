@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "Kalvium Audit Engine",
+      "runtimeExecutable": "bash",
+      "runtimeArgs": ["start.sh"],
+      "port": 8002,
+      "cwd": "/Users/apple/Desktop/Kalvium Audit Engine"
+    }
+  ]
+}

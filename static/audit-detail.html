@@ -1,0 +1,596 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit — Audit Detail</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+  * { font-family:'Inter',sans-serif; }
+  .mono { font-family:'JetBrains Mono',monospace; }
+  :root { --k-red:#E8192C; }
+  body { margin:0; background:#fafafa; color:#111827; }
+  header { border-bottom:1px solid #f0f0f0; background:#fff; }
+  .card { background:#fff;border:1px solid #eceef1;border-radius:8px;padding:20px;margin-bottom:16px; }
+  .detail-row { display:grid; gap:16px; margin-bottom:16px; align-items:start; }
+  .detail-row > .card { margin-bottom:0; height:100%; }
+  .detail-row.split-1-2 { grid-template-columns:1fr 2fr; }
+  .detail-row.split-1-1 { grid-template-columns:1fr 1fr; }
+  @media (max-width: 900px) {
+    .detail-row.split-1-2, .detail-row.split-1-1 { grid-template-columns:1fr; }
+  }
+  .sec-label { font-size:10.5px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:#9ca3af;margin-bottom:12px; }
+  .btn-dl { display:flex;align-items:center;justify-content:center;gap:6px;padding:9px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #eceef1;background:#f9fafb;color:#374151;text-decoration:none; }
+  .btn-dl:hover { border-color:var(--k-red);color:var(--k-red);background:#fff5f4; }
+
+  .score-big { font-family:'JetBrains Mono',monospace;font-weight:700;font-size:40px;line-height:1; }
+  .grade-pill { font-size:13px;font-weight:700;padding:3px 10px;border-radius:99px; }
+
+  .cat-row { display:flex;align-items:center;gap:10px;margin-bottom:8px; }
+  .cat-name { font-size:12px;color:#374151;width:190px;flex-shrink:0; }
+  .cat-bar-track { flex:1;height:7px;background:#f3f4f6;border-radius:99px;overflow:hidden; }
+  .cat-bar-fill { height:100%;border-radius:99px; }
+  .cat-score { font-family:'JetBrains Mono',monospace;font-size:11.5px;font-weight:700;width:38px;text-align:right;flex-shrink:0; }
+
+  .bullet-list { list-style:none;padding:0;margin:0;font-size:12.5px;line-height:1.7;color:#374151; }
+  .bullet-list li { padding-left:16px;position:relative;margin-bottom:4px; }
+  .bullet-list.good li::before { content:'✓';position:absolute;left:0;color:#16a34a;font-weight:700; }
+  .bullet-list.bad li::before { content:'→';position:absolute;left:0;color:#dc2626;font-weight:700; }
+
+  .hist-row { display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid #f3f4f6; }
+  .hist-row:first-child { border-top:none; }
+  .leadsheet-row { display:flex;justify-content:space-between;gap:12px;font-size:12px;padding:4px 0;border-top:1px solid #f6f7f8;color:#374151; }
+  .leadsheet-row:first-child { border-top:none; }
+  .hist-dot { width:7px;height:7px;border-radius:50%;background:#9ca3af;margin-top:5px;flex-shrink:0; }
+  .hist-dot.ok { background:#16a34a; } .hist-dot.bad { background:#dc2626; } .hist-dot.push { background:#2563eb; }
+  .hist-label { font-size:12.5px;font-weight:600;color:#111827; }
+  .hist-meta { font-size:10.5px;color:#9ca3af;margin-top:1px; }
+  .hist-changes { margin-top:4px;font-size:10.5px;color:#374151; }
+  .hist-change-row { display:flex;gap:6px;padding:1px 0; }
+  .hist-change-old { color:#dc2626;text-decoration:line-through; }
+  .hist-change-new { color:#16a34a; }
+
+  .tx-row { display:flex;gap:10px;padding:6px 0;border-top:1px solid #f6f7f8;font-size:12px; }
+  .tx-row:first-child { border-top:none; }
+  .tx-time { color:#9ca3af;flex-shrink:0;width:44px; }
+  .tx-speaker { font-weight:700;flex-shrink:0;width:80px; }
+  .tx-speaker.counsellor { color:#2563eb; } .tx-speaker.student { color:#16a34a; } .tx-speaker.parent { color:#d97706; }
+  .tx-text { color:#374151;flex:1; }
+
+  details > summary { cursor:pointer;list-style:none; }
+  details > summary::-webkit-details-marker { display:none; }
+
+  .k-input { width:100%;background:#fafafa;border:1px solid #e5e7eb;border-radius:4px;padding:7px 10px;font-size:12px;color:#111827;outline:none;transition:all .15s; }
+  .k-input:focus { border-color:var(--k-red);background:#fff;box-shadow:0 0 0 3px rgba(232,25,44,0.10); }
+  .k-field-label { font-size:10px;font-weight:600;color:#6b7280;margin-bottom:3px;display:block; }
+  .btn-primary { background:var(--k-red);color:#fff;font-size:12px;font-weight:600;padding:9px 16px;border-radius:6px;border:none;cursor:pointer; }
+  .btn-primary:hover { background:#c1121f; }
+  .assoc-picker-list { position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #e5e7eb;border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.08);max-height:180px;overflow-y:auto;z-index:80;margin-top:2px; }
+  .assoc-picker-item { padding:7px 10px;font-size:12px;cursor:pointer;color:#111827; }
+  .assoc-picker-item:hover { background:#fff5f4;color:var(--k-red); }
+  .assoc-picker-empty { padding:8px 10px;font-size:10.5px;color:#9ca3af;line-height:1.4; }
+  .assoc-picker-invalid { border-color:#dc2626!important;background:#fef2f2!important; }
+</style>
+</head>
+<body>
+
+<header class="flex items-center justify-between px-6" style="height:56px">
+  <div class="flex items-center gap-3">
+    <a href="/static/history.html" class="text-gray-400 hover:text-gray-700" title="Back to History">←</a>
+    <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" style="height:24px;width:auto"/>
+    <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+    <span class="text-sm font-semibold text-gray-700" id="page-title">Audit Detail</span>
+  </div>
+  <div class="flex items-center gap-3">
+    <div id="user-chip" class="text-xs text-gray-500"></div>
+    <button onclick="signOut()" class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition" style="border-radius:4px;background:none;cursor:pointer">Sign out</button>
+  </div>
+</header>
+
+<main style="max-width:1320px;margin:0 auto;padding:22px 24px 64px" id="main-content">
+  <p class="text-xs text-gray-400">Loading…</p>
+</main>
+
+<script>
+const params = new URLSearchParams(location.search);
+const SID = params.get('session_id') || params.get('id') || '';
+let CURRENT_USER = null;
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function scoreColor(s) { return s >= 7 ? '#16a34a' : s >= 5 ? '#d97706' : '#dc2626'; }
+function gradeColors(g) {
+  g = (g || '').replace('+','');
+  if (g === 'A') return ['#dcfce7','#15803d'];
+  if (g === 'B') return ['#fef3c7','#a16207'];
+  if (g === 'C') return ['#fed7aa','#c2410c'];
+  return ['#fee2e2','#b91c1c'];
+}
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+function dlLink(kind) {
+  const actor = encodeURIComponent((CURRENT_USER && CURRENT_USER.name) || '');
+  return `/api/v1/audit/${SID}/download/${kind}?actor=${actor}`;
+}
+
+function renderOverview(report, meta) {
+  const score = report.score || {};
+  const overall = score.overall != null ? score.overall : 0;
+  const grade = score.grade || '—';
+  const [gbg, gfg] = gradeColors(grade);
+  const dur = report.duration_seconds || 0;
+  const durStr = `${Math.floor(dur/60)}m ${Math.round(dur%60)}s`;
+
+  return `
+    <div class="card">
+      <div class="flex items-start justify-between flex-wrap gap-4">
+        <div>
+          <div class="sec-label">Session</div>
+          <div class="text-sm font-semibold text-gray-800">${escapeHtml(meta.label || 'Unlabeled')}</div>
+          <div class="text-[11px] text-gray-400 mt-1 mono">${escapeHtml(SID)}</div>
+          <div class="text-[11px] text-gray-400 mt-2">${escapeHtml((meta.date||'').replace('T',' ').slice(0,16))} · ${durStr} · ${escapeHtml(report.language_detected||'').toUpperCase()}</div>
+        </div>
+        <div class="text-center">
+          <div class="score-big" style="color:${scoreColor(overall/10)}">${overall}</div>
+          <span class="grade-pill" style="background:${gbg};color:${gfg}">${escapeHtml(grade)}</span>
+        </div>
+      </div>
+      <div class="flex gap-2 mt-5">
+        <a class="btn-dl" href="${dlLink('pdf')}">📄 PDF Report</a>
+        <a class="btn-dl" href="${dlLink('excel')}">📊 Excel</a>
+        <a class="btn-dl" href="${dlLink('transcript')}">📝 Transcript</a>
+      </div>
+    </div>`;
+}
+
+function renderCategories(report) {
+  const cats = (report.score || {}).category_scores || {};
+  const entries = Object.values(cats);
+  if (!entries.length) return '';
+  const rows = entries.map(c => {
+    const raw = c.raw_score != null ? c.raw_score : 0;
+    return `<div class="cat-row">
+      <div class="cat-name">${escapeHtml(c.category || '')}</div>
+      <div class="cat-bar-track"><div class="cat-bar-fill" style="width:${Math.min(100, raw/10*100)}%;background:${scoreColor(raw)}"></div></div>
+      <div class="cat-score" style="color:${scoreColor(raw)}">${raw.toFixed ? raw.toFixed(1) : raw}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card"><div class="sec-label">Category Breakdown</div>${rows}</div>`;
+}
+
+function renderCoaching(report) {
+  const strengths = report.top_strengths || [];
+  const improvements = report.improvement_areas || [];
+  if (!strengths.length && !improvements.length) return '';
+  return `<div class="card">
+    <div class="grid grid-cols-2 gap-6">
+      <div>
+        <div class="sec-label" style="color:#16a34a">Strengths</div>
+        <ul class="bullet-list good">${strengths.map(s => `<li>${escapeHtml(s)}</li>`).join('') || '<li style="color:#d1d5db">None recorded</li>'}</ul>
+      </div>
+      <div>
+        <div class="sec-label" style="color:#dc2626">Areas to Improve</div>
+        <ul class="bullet-list bad">${improvements.map(s => `<li>${escapeHtml(s)}</li>`).join('') || '<li style="color:#d1d5db">None recorded</li>'}</ul>
+      </div>
+    </div>
+  </div>`;
+}
+
+function renderDeckCoverage(report) {
+  const d = report.deck_coverage;
+  if (!d || !d.deck_id) return '';
+  const missedMust = d.missed_must || [];
+  const missedShould = d.missed_should || [];
+  return `<div class="card">
+    <div class="sec-label">Deck Coverage — ${escapeHtml(d.deck_id)}</div>
+    <div class="flex gap-8 mb-3">
+      <div><div class="text-2xl font-bold mono" style="color:${scoreColor((d.coverage_score||0)/10)}">${(d.coverage_score||0).toFixed(0)}%</div><div class="text-[10px] text-gray-400 uppercase">Coverage</div></div>
+      <div><div class="text-2xl font-bold mono">${d.must_covered}/${d.must_total}</div><div class="text-[10px] text-gray-400 uppercase">Must covered</div></div>
+      <div><div class="text-2xl font-bold mono">${d.should_covered}/${d.should_total}</div><div class="text-[10px] text-gray-400 uppercase">Should covered</div></div>
+    </div>
+    ${missedMust.length ? `<div class="text-[11px] font-semibold text-red-600 mb-1">Missing — must-have</div><ul class="bullet-list bad mb-3">${missedMust.map(m=>`<li>${escapeHtml(m)}</li>`).join('')}</ul>` : ''}
+    ${missedShould.length ? `<div class="text-[11px] font-semibold text-amber-600 mb-1">Missing — should-have</div><ul class="bullet-list bad">${missedShould.map(m=>`<li>${escapeHtml(m)}</li>`).join('')}</ul>` : ''}
+  </div>`;
+}
+
+function renderLeadSheet(leadSheet) {
+  const entries = Object.entries(leadSheet || {}).filter(([k, v]) => k && String(v || '').trim());
+  if (!entries.length) return '';
+  const rows = entries.map(([k, v]) => `<div class="leadsheet-row"><span style="color:#9ca3af;flex-shrink:0">${escapeHtml(k)}</span><span style="text-align:right">${escapeHtml(String(v))}</span></div>`).join('');
+  return `<div class="card">
+    <details>
+      <summary class="sec-label" style="margin-bottom:0">Lead Sheet / CRM Data (${entries.length} fields) — click to expand ▾</summary>
+      <div class="mt-3">${rows}</div>
+    </details>
+  </div>`;
+}
+
+function renderVideoAudit(rec) {
+  // rec is null when the auditor never opted into video analysis for this
+  // audit — that's the normal, expected case. Offer to run it now instead
+  // of rendering nothing, since it can be triggered after the fact too.
+  if (!rec) {
+    return `<div class="card" id="video-audit-trigger-card">
+      <div class="sec-label">🎥 Video Snapshot Analysis</div>
+      <p class="text-[11px] text-gray-500 mb-2">Not run for this audit yet — optional, uses the same recording link. Downloads the full video and runs 5 GPT-4o vision calls (real cost).</p>
+      <button class="btn-secondary" id="run-video-audit-btn" onclick="runVideoAudit()">▶ Run Video Snapshot Analysis</button>
+    </div>`;
+  }
+
+  const statusLabels = {
+    queued: 'Queued', downloading: 'Downloading video…', reading_duration: 'Reading duration…',
+    extracting: 'Extracting screenshots…', analyzing: 'Analyzing (GPT-4o vision)…',
+    summarizing: 'Summarizing…', completed: 'Completed', failed: 'Failed',
+  };
+  const statusLine = statusLabels[rec.status] || rec.status;
+
+  if (rec.status === 'failed') {
+    return `<div class="card">
+      <div class="sec-label">🎥 Video Snapshot Analysis</div>
+      <p class="text-[11px] text-red-500">Failed: ${escapeHtml(rec.error || 'unknown error')}</p>
+    </div>`;
+  }
+  if (rec.status !== 'completed') {
+    return `<div class="card">
+      <div class="sec-label">🎥 Video Snapshot Analysis</div>
+      <p class="text-[11px] text-gray-500">${escapeHtml(statusLine)} — refresh this page in a moment.</p>
+    </div>`;
+  }
+
+  const s = rec.summary || {};
+  const tf = s.tracker_fields || {};
+  const shots = rec.screenshots || [];
+  const flagsHtml = (s.flags || []).length
+    ? `<ul class="bullet-list bad mb-3">${s.flags.map(f => `<li>${escapeHtml(f)}</li>`).join('')}</ul>` : '';
+
+  const trackerPairs = [
+    ['Demo Attendees', tf['Demo Attendees']],
+    ['Camera Status', tf['Camera Status']],
+    ['Deck Presentation', tf['Deck Presentation']],
+    ['Screen-share Mode', tf['Screen-share Mode (Full screen / PiP)']],
+  ];
+  const trackerHtml = trackerPairs.map(([k, v]) =>
+    `<div class="leadsheet-row"><span style="color:#9ca3af">${escapeHtml(k)}</span><span style="font-weight:600">${escapeHtml(v || '—')}</span></div>`
+  ).join('');
+
+  const statPairs = [
+    ['Frames analyzed', `${s.frames_analyzed ?? 0}/${(s.frames_analyzed ?? 0) + (s.frames_failed ?? 0)}`],
+    ['Avg. people visible', s.avg_people_count ?? '—'],
+    ['Max people visible', s.max_people_count ?? '—'],
+    ['Slides/deck detected', s.slides_presented_in ?? '—'],
+  ];
+  const statsHtml = statPairs.map(([k, v]) =>
+    `<div class="leadsheet-row"><span style="color:#9ca3af">${escapeHtml(k)}</span><span>${escapeHtml(String(v))}</span></div>`
+  ).join('');
+
+  const thumbsHtml = shots.map(shot => {
+    if (!shot.filename) {
+      return `<div class="video-thumb-cell"><div class="video-thumb-fail">✕ ${escapeHtml(shot.label)}<br>extraction failed</div></div>`;
+    }
+    const a = shot.analysis || {};
+    if (a.error) {
+      return `<div class="video-thumb-cell">
+        <img src="/api/v1/video-audit/${rec.id}/screenshot/${shot.filename}" loading="lazy" class="video-thumb-img"/>
+        <div class="video-thumb-label">${escapeHtml(shot.label)}</div>
+        <div class="video-thumb-badge"><span class="text-red-500">analysis failed</span></div>
+      </div>`;
+    }
+    return `<div class="video-thumb-cell">
+      <img src="/api/v1/video-audit/${rec.id}/screenshot/${shot.filename}" loading="lazy" class="video-thumb-img"/>
+      <div class="video-thumb-label">${escapeHtml(shot.label)}</div>
+      <div class="video-thumb-badge">
+        <div><b>People:</b> ${a.people_count ?? '—'}</div>
+        <div><b>Slides shown:</b> ${a.slides_presented ? 'Yes' : 'No'}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  return `<div class="card">
+    <div class="sec-label">🎥 Video Snapshot Analysis (optional add-on — ${shots.length} screenshots, ${rec.duration_seconds ? Math.round(rec.duration_seconds) + 's video' : ''})</div>
+    <p class="text-[10px] text-gray-400 mb-2">Tracker fields (auto-filled from this evidence — one clear detection across the 5 samples settles the value):</p>
+    <div class="mb-3">${trackerHtml}</div>
+    ${flagsHtml}
+    <div class="video-thumb-grid mb-3">${thumbsHtml}</div>
+    <details>
+      <summary class="text-[11px] text-gray-500" style="cursor:pointer">Full stats — click to expand ▾</summary>
+      <div class="mt-2">${statsHtml}</div>
+    </details>
+  </div>
+  <style>
+    .video-thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:8px}
+    .video-thumb-cell{border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;font-size:10px}
+    .video-thumb-img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#f3f4f6}
+    .video-thumb-fail{aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;text-align:center;color:#ef4444;background:#fef2f2;padding:4px}
+    .video-thumb-label{padding:2px 6px;font-weight:600;color:#6b7280}
+    .video-thumb-badge{padding:0 6px 6px;color:#374151}
+  </style>`;
+}
+
+function renderActivity(events) {
+  if (!events || !events.length) return '';
+  const rows = events.map(e => {
+    const dotCls = e.event_type === 'audit_failed' ? 'bad' : e.event_type === 'audit_completed' ? 'ok' : e.event_type === 'pushed_to_tracker' ? 'push' : '';
+    const when = escapeHtml((e.timestamp||'').replace('T',' ').slice(0,19));
+    const who = e.actor ? escapeHtml(e.actor) : 'unknown';
+    let changesHtml = '';
+    const changes = (e.detail && e.detail.changes) || {};
+    const keys = Object.keys(changes);
+    if (keys.length) {
+      changesHtml = '<div class="hist-changes">' + keys.map(k => `<div class="hist-change-row"><span>${escapeHtml(k)}:</span> <span class="hist-change-old">${escapeHtml(String(changes[k].old||'—'))}</span> → <span class="hist-change-new">${escapeHtml(String(changes[k].new||'—'))}</span></div>`).join('') + '</div>';
+    }
+    return `<div class="hist-row">
+      <span class="hist-dot ${dotCls}"></span>
+      <div>
+        <div class="hist-label">${escapeHtml(e.event_label || e.event_type)}</div>
+        <div class="hist-meta">${when} · ${who}</div>
+        ${changesHtml}
+      </div>
+    </div>`;
+  }).join('');
+  return `<div class="card"><div class="sec-label">Activity for this audit</div>${rows}</div>`;
+}
+
+function renderTranscript(report) {
+  const utts = report.utterances || [];
+  if (!utts.length) return '';
+  const rows = utts.map(u => {
+    const speaker = (u.speaker || 'unknown').toLowerCase();
+    const mins = Math.floor((u.start_time||0)/60), secs = Math.floor((u.start_time||0)%60);
+    const text = u.english_text || u.native_text || '';
+    if (!text.trim()) return '';
+    return `<div class="tx-row">
+      <div class="tx-time mono">${String(mins).padStart(2,'0')}:${String(secs).padStart(2,'0')}</div>
+      <div class="tx-speaker ${speaker}">${escapeHtml(u.speaker||'')}</div>
+      <div class="tx-text">${escapeHtml(text)}</div>
+    </div>`;
+  }).join('');
+  return `<div class="card">
+    <details>
+      <summary class="sec-label" style="margin-bottom:0">Full Transcript (${utts.length} lines) — click to expand ▾</summary>
+      <div class="mt-3">${rows}</div>
+    </details>
+  </div>`;
+}
+
+// ── Edit & push to tracker — right from this page, no round-trip to New Audit ──
+let ASSOCIATE_ROSTER = [];
+let _trackerColumns = [];
+const _TRACKER_LONG_FIELDS = new Set(['\nDetailed review notes', 'Auditor comments on Call Pitch', 'Notes']);
+
+async function loadAssociateRoster() {
+  try {
+    const res = await fetch('/api/v1/associate-roster');
+    ASSOCIATE_ROSTER = (await res.json()).names || [];
+  } catch (e) { ASSOCIATE_ROSTER = []; }
+}
+
+function attachAssociatePicker(inputEl) {
+  if (!inputEl || inputEl.dataset.pickerAttached) return;
+  inputEl.dataset.pickerAttached = '1';
+  inputEl.setAttribute('autocomplete', 'off');
+  const wrap = document.createElement('div');
+  wrap.style.position = 'relative';
+  inputEl.parentNode.insertBefore(wrap, inputEl);
+  wrap.appendChild(inputEl);
+  const list = document.createElement('div');
+  list.className = 'assoc-picker-list hidden';
+  wrap.appendChild(list);
+
+  function renderList(filter) {
+    const q = (filter || '').toLowerCase();
+    const matches = ASSOCIATE_ROSTER.filter(n => n.toLowerCase().includes(q)).slice(0, 8);
+    list.innerHTML = matches.length
+      ? matches.map(n => `<div class="assoc-picker-item" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('')
+      : `<div class="assoc-picker-empty">No match in the roster — ask an admin to add this name under Manage Users</div>`;
+    list.classList.remove('hidden');
+  }
+  inputEl.addEventListener('focus', () => renderList(inputEl.value));
+  inputEl.addEventListener('input', () => renderList(inputEl.value));
+  inputEl.addEventListener('blur', () => {
+    setTimeout(() => {
+      list.classList.add('hidden');
+      if (inputEl.value && !ASSOCIATE_ROSTER.includes(inputEl.value)) {
+        inputEl.value = '';
+        inputEl.classList.add('assoc-picker-invalid');
+        setTimeout(() => inputEl.classList.remove('assoc-picker-invalid'), 1200);
+      }
+    }, 150);
+  });
+  list.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.assoc-picker-item');
+    if (!item) return;
+    inputEl.value = item.dataset.name;
+    list.classList.add('hidden');
+  });
+}
+
+function _trackerFieldHtml(col, i, fields) {
+  const label = escapeHtml(col.replace(/\n/g, ' ').trim());
+  const val = fields[col] != null ? String(fields[col]) : '';
+  if (_TRACKER_LONG_FIELDS.has(col)) {
+    return `<div class="col-span-2"><label class="k-field-label">${label}</label>
+      <textarea id="etf-${i}" class="k-input" rows="2">${escapeHtml(val)}</textarea></div>`;
+  }
+  return `<div><label class="k-field-label">${label}</label>
+    <input id="etf-${i}" class="k-input" type="text" value="${escapeHtml(val)}"/></div>`;
+}
+
+function renderTrackerEditor(fields, columns, previouslyPushed) {
+  _trackerColumns = columns;
+  const filled = [], blank = [];
+  columns.forEach((col, i) => {
+    if (!col || !col.trim()) return;
+    (String(fields[col] || '').trim() ? filled : blank).push([col, i]);
+  });
+  const filledHtml = filled.map(([c, i]) => _trackerFieldHtml(c, i, fields)).join('');
+  const blankHtml  = blank.map(([c, i]) => _trackerFieldHtml(c, i, fields)).join('');
+  const note = previouslyPushed
+    ? `<p class="text-[11px] mb-3" style="color:#2563eb">Already pushed — editing here re-pushes with the changes tracked below in the activity trail.</p>`
+    : `<p class="text-[11px] text-gray-500 mb-3">Not pushed yet — this is the same auto-filled row the Push to Tracker flow would use.</p>`;
+
+  return `<div class="card">
+    <div class="sec-label" style="margin-bottom:2px">Edit &amp; Push to Tracker</div>
+    ${note}
+    <div class="grid grid-cols-2 gap-x-3 gap-y-3" id="tracker-editor-fields">${filledHtml}</div>
+    ${blank.length ? `
+      <button id="tracker-more-toggle" type="button" onclick="toggleEditorMore()" style="background:none;border:none;color:#9ca3af;text-decoration:underline;font-size:11px;cursor:pointer;padding:0;margin-top:14px">+ Show ${blank.length} more fields</button>
+      <div id="tracker-editor-more" class="grid grid-cols-2 gap-x-3 gap-y-3 mt-3 hidden">${blankHtml}</div>` : ''}
+    <div class="flex items-center gap-3 mt-4">
+      <button class="btn-primary" onclick="saveTrackerRow()">Save &amp; Push</button>
+      <span id="tracker-save-status" class="text-[11px]"></span>
+    </div>
+  </div>`;
+}
+
+function toggleEditorMore() {
+  const box = document.getElementById('tracker-editor-more');
+  const btn = document.getElementById('tracker-more-toggle');
+  const willShow = box.classList.contains('hidden');
+  box.classList.toggle('hidden');
+  btn.textContent = willShow ? '− Hide extra fields' : `+ Show ${box.children.length} more fields`;
+}
+
+function collectTrackerRow() {
+  const row = {};
+  _trackerColumns.forEach((col, i) => {
+    if (!col || !col.trim()) return;
+    const el = document.getElementById(`etf-${i}`);
+    if (el) row[col] = el.value;
+  });
+  return row;
+}
+
+async function saveTrackerRow() {
+  const row = collectTrackerRow();
+  const statusEl = document.getElementById('tracker-save-status');
+  const actor = encodeURIComponent((CURRENT_USER && CURRENT_USER.name) || '');
+  statusEl.textContent = 'Saving…'; statusEl.style.color = '#6b7280';
+  try {
+    const excelRes = await fetch(`/api/v1/audit/${SID}/save-to-excel?actor=${actor}`, {
+      method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(row),
+    });
+    if (!excelRes.ok) throw new Error(await excelRes.text());
+    let msg = 'Saved to Excel';
+    try {
+      const gRes = await fetch(`/api/v1/audit/${SID}/save-to-gsheet?actor=${actor}`, {
+        method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(row),
+      });
+      if (gRes.ok) msg += ' and Google Sheet';
+    } catch (e) { /* Sheets not connected — Excel push still succeeded */ }
+    statusEl.textContent = `✓ ${msg}`;
+    statusEl.style.color = '#16a34a';
+    setTimeout(() => location.reload(), 900);   // reload so the activity trail below shows the new push + diff
+  } catch (e) {
+    statusEl.textContent = `Failed: ${e.message}`;
+    statusEl.style.color = '#dc2626';
+  }
+}
+
+async function runVideoAudit() {
+  const btn = document.getElementById('run-video-audit-btn');
+  const card = document.getElementById('video-audit-trigger-card');
+  btn.disabled = true; btn.textContent = 'Queueing…';
+  try {
+    const res = await fetch('/api/v1/video-audit', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({session_id: SID, actor: CURRENT_USER?.name || ''}),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to queue');
+    card.querySelector('p').textContent = 'Queued — this can take a minute (download + 5 frame analyses). Refresh to check.';
+    btn.textContent = 'Queued ✓';
+    pollVideoAuditDetail(data.video_audit_id);
+  } catch (e) {
+    btn.disabled = false; btn.textContent = '▶ Run Video Snapshot Analysis';
+    card.querySelector('p').insertAdjacentHTML('afterend', `<p class="text-[11px] text-red-500">Error: ${escapeHtml(e.message)}</p>`);
+  }
+}
+
+async function pollVideoAuditDetail(videoAuditId) {
+  try {
+    const res = await fetch(`/api/v1/video-audit/${videoAuditId}`);
+    if (!res.ok) return;
+    const rec = await res.json();
+    if (rec.status === 'completed' || rec.status === 'failed') {
+      // Re-render just this section with the finished result.
+      document.getElementById('video-audit-trigger-card').outerHTML = renderVideoAudit(rec);
+      return;
+    }
+    setTimeout(() => pollVideoAuditDetail(videoAuditId), 5000);
+  } catch (e) { /* transient — stop quietly */ }
+}
+
+async function boot() {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  CURRENT_USER = await res.json();
+  document.getElementById('user-chip').textContent = `${CURRENT_USER.name} · ${CURRENT_USER.role}`;
+
+  const main = document.getElementById('main-content');
+  if (!SID) { main.innerHTML = '<p class="text-xs text-red-500">No session specified.</p>'; return; }
+
+  try {
+    await loadAssociateRoster();
+    const [reportRes, actRes, leadRes, trackerRes, videoRes] = await Promise.all([
+      fetch(`/api/v1/audit/${SID}`),
+      fetch(`/api/v1/audit/${SID}/activity`),
+      fetch(`/api/v1/audit/${SID}/lead-sheet`),
+      fetch(`/api/v1/audit/${SID}/tracker-row`),
+      fetch(`/api/v1/video-audit/by-session/${SID}`),
+    ]);
+    if (!reportRes.ok) throw new Error('Audit not found');
+    const report = await reportRes.json();
+    const activity = actRes.ok ? (await actRes.json()).events : [];
+    const leadSheet = leadRes.ok ? (await leadRes.json()).lead_sheet : {};
+    const trackerData = trackerRes.ok ? await trackerRes.json() : null;
+    const videoAudit = videoRes.ok ? (await videoRes.json()).video_audit : null;
+
+    const meta = { label: params.get('label') || report.label || '', date: report.created_at || '' };
+    document.getElementById('page-title').textContent = `Audit — ${(report.created_at||'').slice(0,10)}`;
+
+    // Paired side by side wherever two sections are complementary and
+    // neither needs the full 1320px width on its own — the goal is a
+    // denser, more horizontal page instead of one long single column.
+    // pairRow falls back to a plain full-width card when only one side
+    // of a pair actually has content, rather than leaving an empty half.
+    const pairRow = (splitClass, a, b) => {
+      if (a && b) return `<div class="detail-row ${splitClass}">${a}${b}</div>`;
+      return a || b || '';
+    };
+
+    const overview = renderOverview(report, meta);
+    const categories = renderCategories(report);
+    const coaching = renderCoaching(report);
+    const deckCoverage = renderDeckCoverage(report);
+    const leadSheetHtml = renderLeadSheet(leadSheet);
+    const activityHtml = renderActivity(activity);
+
+    main.innerHTML = [
+      pairRow('split-1-2', overview, categories),
+      pairRow('split-1-1', coaching, deckCoverage),
+      trackerData ? renderTrackerEditor(trackerData.fields, trackerData.columns, trackerData.previously_pushed) : '',
+      renderVideoAudit(videoAudit),
+      pairRow('split-1-1', leadSheetHtml, activityHtml),
+      renderTranscript(report),
+    ].join('');
+
+    if (trackerData) {
+      const ownerIdx = trackerData.columns.indexOf('Lead Owner');
+      if (ownerIdx > -1) attachAssociatePicker(document.getElementById(`etf-${ownerIdx}`));
+    }
+  } catch (e) {
+    main.innerHTML = `<p class="text-xs text-red-500">Could not load this audit: ${escapeHtml(String(e))}</p>`;
+  }
+}
+boot();
+</script>
+</body>
+</html>

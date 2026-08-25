@@ -1,0 +1,2388 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Kalvium Demo Audit</title>
+<script src="https://cdn.tailwindcss.com"></script>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500&display=swap');
+  *, *::before, *::after { box-sizing: border-box; }
+  * { font-family: 'Inter', sans-serif; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  :root { --k-red:#E8192C; --k-red-dark:#c1121f; --k-red-light:#fff5f4; --k-red-border:#fecdd3; }
+  body { background:#ffffff; color:#111827; min-height:100vh; }
+
+  /* ── Layout ── */
+  #app { display:flex; flex-direction:column; height:100vh; overflow:hidden; }
+  #main-grid {
+    display:grid;
+    grid-template-columns:260px 1fr 300px;
+    flex:1;
+    overflow:hidden;
+  }
+  aside, main { overflow-y:auto; }
+
+  /* ── Cards ── */
+  .card { background:transparent; border:none; border-radius:0; border-bottom:1px solid #f3f4f6; padding:18px 20px; }
+  .card:last-child { border-bottom:none; }
+  .queue-card { border:1px solid #e5e7eb; border-radius:6px; padding:8px 10px; }
+  .queue-card + .queue-card { margin-top:6px; }
+  .processing-card { cursor:pointer; border-color:#fde68a; background:#fffbeb; }
+  .processing-card:hover { border-color:#d97706; }
+  .queue-btn { font-size:10px; padding:3px 8px; border-radius:4px; border:1px solid #d1d5db; background:none; cursor:pointer; }
+  .queue-btn-start { color:#16a34a; border-color:#bbf7d0; }
+  .queue-btn-start:hover { background:#f0fdf4; }
+  .queue-btn-remove { color:#dc2626; border-color:#fecaca; }
+  .queue-btn-remove:hover { background:#fef2f2; }
+  #queue-drawer {
+    position:fixed; top:0; left:0; bottom:0; width:320px; max-width:85vw;
+    background:#fff; z-index:100; padding:18px 16px; overflow-y:auto;
+    box-shadow:2px 0 24px rgba(0,0,0,0.15);
+    transform:translateX(-100%); transition:transform .25s ease;
+  }
+  #queue-drawer.open { transform:translateX(0); }
+  #queue-drawer-backdrop {
+    position:fixed; inset:0; background:rgba(0,0,0,0.25); z-index:99;
+  }
+
+  /* ── Upload tabs ── */
+  .upload-tab { font-size:11px;font-weight:500;padding:5px 0;border-radius:3px;color:#9ca3af;flex:1;border:none;background:none;cursor:pointer;transition:all .15s; }
+  .upload-tab.active { background:var(--k-red);color:#fff; }
+  .upload-tab:hover:not(.active) { color:var(--k-red); }
+
+  /* ── Drop zone ── */
+  .drop-zone { border:1.5px dashed #d1d5db;border-radius:4px;padding:20px 14px;text-align:center;cursor:pointer;transition:all .2s;background:#fff; }
+  .drop-zone:hover,.drop-zone.dragging { border-color:var(--k-red);background:var(--k-red-light); }
+
+  /* ── Inputs ── */
+  .k-input { width:100%;background:#fafafa;border:1px solid #e5e7eb;border-radius:4px;padding:8px 11px;font-size:12px;color:#111827;outline:none;transition:all .15s; }
+  .k-input::placeholder { color:#9ca3af; }
+  .k-input:focus { border-color:var(--k-red);background:#fff;box-shadow:0 0 0 3px rgba(232,25,44,0.10); }
+
+  /* ── Buttons ── */
+  .btn-primary { display:flex;align-items:center;justify-content:center;gap:6px;width:100%;background:var(--k-red);color:#fff;font-size:12px;font-weight:600;padding:9px;border-radius:4px;border:none;cursor:pointer;transition:all .15s; }
+  .btn-primary:hover { background:var(--k-red-dark); }
+  .btn-secondary { width:100%;background:#fff;border:1px solid #e5e7eb;color:#6b7280;font-size:11px;font-weight:500;padding:7px;border-radius:4px;cursor:pointer;transition:all .15s; }
+  .btn-secondary:hover { border-color:var(--k-red);color:var(--k-red); }
+
+  /* ── Pipeline steps ── */
+  .step-card { display:flex;align-items:flex-start;gap:9px;padding:8px 10px;border-radius:3px;border:1px solid transparent;transition:all .25s;background:transparent; }
+  .step-card.active { background:#fff5f4!important;border-color:var(--k-red-border); }
+  .step-card.done   { background:#f0fdf4;border-color:#bbf7d0; }
+  .step-card.error  { background:#fef2f2;border-color:#fecaca; }
+  .step-icon { font-size:11px;margin-top:1px;width:15px;flex-shrink:0;color:#d1d5db;font-weight:700; }
+  .step-card.active .step-icon { color:var(--k-red); }
+  .step-card.done   .step-icon { color:#16a34a; }
+  .step-body { flex:1;min-width:0; }
+  .step-name { font-size:11.5px;font-weight:500;color:#9ca3af; }
+  .step-card.active .step-name { color:var(--k-red); }
+  .step-card.done   .step-name { color:#15803d; }
+  .step-detail { font-size:10px;margin-top:1px;color:#d1d5db;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+  .step-card.active .step-detail { color:#9f1239; }
+  .step-card.done   .step-detail { color:#16a34a; }
+  .step-badge { font-size:9px;font-family:'JetBrains Mono',monospace;color:#e5e7eb;flex-shrink:0; }
+  .step-card.active .step-badge { color:var(--k-red); }
+  .step-card.done   .step-badge { color:#16a34a; }
+
+  /* ── Stat cards ── */
+  .stat-card { background:#f9fafb!important;border:1px solid #f0f0f0!important;border-radius:3px!important;padding:12px 10px;text-align:center; }
+  .stat-val { font-size:20px;font-weight:700;font-family:'JetBrains Mono',monospace;color:#111827; }
+  .stat-lbl { font-size:9px;color:#9ca3af;margin-top:2px;text-transform:uppercase;letter-spacing:.06em; }
+
+  /* ── Score ring ── */
+  #score-card { background:transparent;border:none;border-bottom:1px solid #f3f4f6;border-radius:0;padding:24px; }
+  #score-ring { transition:stroke-dasharray 1.5s cubic-bezier(.34,1.56,.64,1); }
+
+  /* ── Progress bar ── */
+  .k-progress-track { height:4px;background:#fce7e9;border-radius:99px;overflow:hidden; }
+  .k-progress-fill  { height:100%;background:var(--k-red);border-radius:99px;transition:width .5s ease; }
+
+  /* ── Chunk cards ── */
+  .chunk-item { background:#f9fafb!important;border:1px solid #f0f0f0!important;border-radius:3px;padding:8px 10px;font-size:11px;animation:fadeIn .25s ease; }
+  .chunk-item.failed { background:#fef2f2!important;border-color:#fecaca!important; }
+  @keyframes fadeIn { from{opacity:0;transform:translateY(-6px)} to{opacity:1;transform:translateY(0)} }
+
+  /* ── Score bar ── */
+  .score-bar { transition:width 1.2s cubic-bezier(.34,1.56,.64,1);height:3px;border-radius:99px; }
+
+  /* ── Why panel ── */
+  .why-panel { background:#f9fafb!important;border:1px solid #f0f0f0!important;border-radius:3px;padding:10px 12px;margin-bottom:4px;font-size:10px;line-height:1.6;animation:fadeIn .2s ease; }
+  .why-score-line { color:#374151;margin-bottom:4px;font-size:11px; }
+  .why-meta { display:flex;gap:8px;align-items:center;font-size:9px;margin-bottom:6px; }
+  .why-block { margin-bottom:6px; }
+  .why-block:last-child { margin-bottom:0; }
+  .why-label { display:block;font-size:9px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:#6b7280;margin-bottom:3px; }
+  .why-block ul { list-style:none;padding:0;margin:0;color:#6b7280; }
+  .why-block ul li::before { content:'• ';color:#d1d5db; }
+  .why-zero { border-left:2px solid #ef4444;padding-left:8px; }
+  .why-zero p { color:#ef4444; }
+  .why-coach { border-left:2px solid var(--k-red);padding-left:8px; }
+  .why-coach p { color:#374151; }
+  .transcript-cite { background:#f9fafb!important;border:1px solid #f3f4f6;border-radius:3px;padding:6px 8px;margin-bottom:3px; }
+  .cite-ts { font-size:9px;color:#9ca3af;font-family:'JetBrains Mono',monospace; }
+  .cite-quote { color:#374151;font-style:italic;margin:2px 0; }
+  .cite-rel { color:#9ca3af;font-size:9px; }
+  .why-chevron { transition:color .15s; }
+
+  /* ── Audit cat ── */
+  .audit-cat { display:flex;align-items:center;gap:7px;padding:5px 8px;border-radius:3px!important;background:#f9fafb!important;border:1px solid #f3f4f6;transition:all .2s; }
+  .audit-cat.done { background:#f0fdf4!important;border-color:#bbf7d0; }
+  .audit-cat .cat-name { font-size:10px;flex:1;color:#9ca3af; }
+  .audit-cat.done .cat-name { color:#374151; }
+  .audit-cat .cat-score { font-size:11px;font-weight:700;font-family:'JetBrains Mono',monospace; }
+  .audit-cat .cat-spin { width:10px;height:10px;border:1.5px solid #fecdd3;border-top-color:var(--k-red);border-radius:50%;animation:spin .7s linear infinite;flex-shrink:0; }
+  @keyframes spin { to{transform:rotate(360deg)} }
+
+  /* ── Log ── */
+  .log-line { font-family:'JetBrains Mono',monospace;font-size:10px; }
+  .log-line.info    { color:#9ca3af; }
+  .log-line.warn    { color:#d97706; }
+  .log-line.error   { color:#dc2626; }
+  .log-line.success { color:#16a34a; }
+
+  /* ── Grade ── */
+  .grade-A\+ { color:#15803d; }
+  .grade-A   { color:#16a34a; }
+  .grade-B   { color:#ca8a04; }
+  .grade-C   { color:#d97706; }
+  .grade-D   { color:#ea580c; }
+  .grade-F   { color:#dc2626; }
+
+  /* ── Sec label ── */
+  .sec-label { font-size:10px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:#9ca3af;margin-bottom:10px; }
+
+  /* ── Download buttons ── */
+  .dl-btn { display:flex;align-items:center;gap:7px;padding:8px 12px;border-radius:4px!important;font-size:11px;font-weight:600;cursor:pointer;width:100%;transition:all .15s;border:1px solid #f0f0f0!important;background:#f9fafb!important;color:#374151; }
+  .dl-btn:hover { background:var(--k-red-light)!important;border-color:var(--k-red)!important;color:var(--k-red); }
+
+  /* ── Scrollbar ── */
+  ::-webkit-scrollbar { width:3px; }
+  ::-webkit-scrollbar-track { background:transparent; }
+  ::-webkit-scrollbar-thumb { background:#e5e7eb;border-radius:4px; }
+
+  /* ── Recent sessions ── */
+  .recent-item { font-size:11px;padding:6px 9px;border-radius:3px!important;background:#f9fafb!important;border:1px solid #f0f0f0!important;cursor:pointer;display:flex;align-items:center;gap:7px;transition:all .15s; }
+  .recent-item:hover { border-color:#e5e7eb!important;background:#fff!important; }
+
+  /* ── Cat bar row ── */
+  .cat-bar-row { margin-bottom:9px; }
+
+  /* ── Live dot ── */
+  .live-dot { width:7px;height:7px;border-radius:50%;background:#16a34a;animation:livePulse 1.4s ease-in-out infinite; }
+  @keyframes livePulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.4;transform:scale(0.65);} }
+
+  /* ── Upload status ── */
+  #upload-status { font-family:'JetBrains Mono',monospace; }
+
+  /* ── Results mode — dark sidebar ── */
+  .results-sidebar { background:#0d0d0d!important;border-right:1px solid #1a1a1a!important; }
+  .results-sidebar .card { border-bottom:1px solid #1a1a1a!important; }
+  .results-sidebar .sec-label { color:#3d3d3d!important; }
+  .results-sidebar .upload-tabs-bar { background:#1a1a1a!important; }
+  .results-sidebar .upload-tab { color:#555!important;background:transparent!important; }
+  .results-sidebar .upload-tab.active { background:#2a2a2a!important;color:#e5e5e5!important; }
+  .results-sidebar .drop-zone { background:#181818!important;border-color:#2a2a2a!important; }
+  .results-sidebar .drop-zone p,.results-sidebar .drop-zone svg { color:#3d3d3d!important; }
+  .results-sidebar .drop-zone:hover,.results-sidebar .drop-zone.dragging { border-color:var(--k-red)!important;background:#1a0a0a!important; }
+  .results-sidebar .k-input { background:#1a1a1a!important;border-color:#2a2a2a!important;color:#e5e5e5!important; }
+  .results-sidebar #upload-status { color:#6b7280!important; }
+
+  /* ── Results page animation ── */
+  @keyframes pageSlideIn { from{opacity:0;transform:translateY(10px)} to{opacity:1;transform:translateY(0)} }
+  .results-page-enter { animation:pageSlideIn .28s cubic-bezier(.22,.68,0,1.2) both; }
+
+  /* ── Back breadcrumb ── */
+  #results-back-bar { display:none;align-items:center;gap:8px;padding:10px 24px;border-bottom:1px solid #f0f0f0;background:#fafafa; }
+  #results-back-bar.visible { display:flex; }
+  #results-back-bar button { display:flex;align-items:center;gap:6px;font-size:12px;font-weight:500;color:#6b7280;background:none;border:none;cursor:pointer;padding:0;transition:color .15s; }
+  #results-back-bar button:hover { color:var(--k-red); }
+  #results-back-bar .breadcrumb-sep { color:#d1d5db;font-size:12px; }
+  #results-back-bar .breadcrumb-cur { font-size:12px;font-weight:600;color:#111827; }
+
+  /* ── Batch ── */
+  .batch-status-dot { display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:4px; }
+  .batch-label { color:#374151;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+
+  /* Flatten rounds globally */
+  .rounded-2xl,.rounded-xl,.rounded-3xl { border-radius:6px!important; }
+  .rounded-lg  { border-radius:4px!important; }
+  .rounded-md  { border-radius:3px!important; }
+  .rounded-full { border-radius:99px!important; }
+
+  /* ── Modal ── */
+  .k-modal-overlay { position:fixed;inset:0;z-index:700;background:rgba(17,24,39,0.55);display:flex;align-items:center;justify-content:center;padding:20px; }
+  .k-modal-overlay.hidden { display:none; }
+  .k-modal { background:#fff;border-radius:8px;max-width:640px;width:100%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.25); }
+  .k-modal-header { display:flex;align-items:center;padding:16px 20px;border-bottom:1px solid #f0f0f0; }
+  .k-modal-header h3 { font-size:14px;font-weight:700;color:#111827;margin:0; }
+  .k-modal-close { margin-left:auto;background:none;border:none;cursor:pointer;color:#9ca3af;font-size:18px;line-height:1;padding:0 4px; }
+  .k-modal-close:hover { color:#111827; }
+  .k-modal-body { padding:16px 20px;overflow-y:auto;flex:1; }
+  .k-modal-footer { padding:14px 20px;border-top:1px solid #f0f0f0;display:flex;gap:8px;justify-content:flex-end; }
+  .k-field-label { font-size:10px;font-weight:600;color:#6b7280;margin-bottom:3px;display:block; }
+
+  /* ── Deck cards ── */
+  .deck-card { border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;margin-bottom:10px; }
+  .deck-card-head { display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap; }
+  .deck-name { font-size:13px;font-weight:700;color:#111827; }
+  .deck-meta { font-size:11px;color:#9ca3af;margin-top:2px; }
+  .deck-badge { font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.03em;padding:2px 8px;border-radius:99px;white-space:nowrap; }
+  .deck-badge.draft { background:#f3f4f6;color:#6b7280; }
+  .deck-badge.review { background:#fef3c7;color:#a16207; }
+  .deck-badge.active { background:#dcfce7;color:#15803d; }
+  .deck-badge.deprecated,.deck-badge.archived { background:#f3f4f6;color:#9ca3af; }
+  .deck-actions { display:flex;gap:6px;align-items:center;flex-shrink:0; }
+  .deck-crit-toggle { font-size:11px;color:#9ca3af;text-decoration:underline;cursor:pointer;background:none;border:none;padding:0;margin-top:8px; }
+  .deck-crit-list { margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6; }
+  .deck-crit-row { display:flex;align-items:baseline;gap:8px;font-size:11.5px;padding:3px 0;color:#374151; }
+  .deck-crit-imp { font-size:9px;font-weight:700;text-transform:uppercase;flex-shrink:0;width:44px; }
+  .deck-crit-imp.must { color:#dc2626; }
+  .deck-crit-imp.should { color:#d97706; }
+  .deck-crit-imp.can { color:#9ca3af; }
+
+  /* ── Associate cards ── */
+  .assoc-card { border:1px solid #e5e7eb;border-radius:6px;padding:12px 14px;margin-bottom:10px; }
+  .assoc-card-head { display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap; }
+  .assoc-name { font-size:13px;font-weight:700;color:#111827; }
+  .assoc-meta { font-size:11px;color:#9ca3af;margin-top:2px; }
+  .assoc-score { font-family:'JetBrains Mono',monospace;font-size:18px;font-weight:700;text-align:right; }
+  .assoc-score.good { color:#16a34a; } .assoc-score.avg { color:#d97706; } .assoc-score.bad { color:#dc2626; }
+  .assoc-trend-toggle { font-size:11px;color:#9ca3af;text-decoration:underline;cursor:pointer;background:none;border:none;padding:0;margin-top:8px; }
+  .assoc-detail { margin-top:10px;padding-top:10px;border-top:1px solid #f3f4f6; }
+  .assoc-detail-label { font-size:9.5px;font-weight:700;color:#9ca3af;text-transform:uppercase;letter-spacing:.04em;margin:8px 0 3px; }
+  .assoc-detail-label:first-child { margin-top:0; }
+  .assoc-row { display:flex;justify-content:space-between;font-size:11px;padding:2px 0;color:#374151; }
+
+  /* ── Associate picker (roster-restricted combobox) ── */
+  .assoc-picker-list { position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #e5e7eb;border-radius:4px;box-shadow:0 4px 16px rgba(0,0,0,.08);max-height:180px;overflow-y:auto;z-index:80;margin-top:2px; }
+  .assoc-picker-item { padding:7px 10px;font-size:12px;cursor:pointer;color:#111827; }
+  .assoc-picker-item:hover { background:#fff5f4;color:var(--k-red); }
+  .assoc-picker-empty { padding:8px 10px;font-size:10.5px;color:#9ca3af;line-height:1.4; }
+  .assoc-picker-invalid { border-color:#dc2626!important;background:#fef2f2!important; }
+
+  /* ── History / activity log ── */
+  .hist-row { display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-top:1px solid #f3f4f6; }
+  .hist-row:first-child { border-top:none; }
+  .hist-dot { width:7px;height:7px;border-radius:50%;background:#9ca3af;margin-top:5px;flex-shrink:0; }
+  .hist-dot.ok { background:#16a34a; } .hist-dot.bad { background:#dc2626; } .hist-dot.push { background:#2563eb; }
+  .hist-main { flex:1;min-width:0; }
+  .hist-label { font-size:12px;font-weight:600;color:#111827; }
+  .hist-meta { font-size:10.5px;color:#9ca3af;margin-top:1px; }
+  .hist-changes { margin-top:4px;font-size:10.5px;color:#374151; }
+  .hist-change-row { display:flex;gap:6px;padding:1px 0; }
+  .hist-change-field { color:#6b7280;flex-shrink:0; }
+  .hist-change-old { color:#dc2626;text-decoration:line-through; }
+  .hist-change-new { color:#16a34a; }
+</style>
+</head>
+<body>
+
+<!-- ══ APP ════════════════════════════════════════════════════════════════════ -->
+<div id="app" class="hidden">
+
+  <!-- ── HEADER ─────────────────────────────────────────────────────────────── -->
+  <header class="flex items-center justify-between px-5 py-0 flex-shrink-0" style="height:56px;border-bottom:1px solid #f0f0f0;background:#fff">
+    <div class="flex items-center gap-3">
+      <img src="/logo/Logo_v2_Red_2x (2).png" alt="Kalvium" onclick="resetAndHome()"
+           style="height:26px;width:auto;object-fit:contain;cursor:pointer"/>
+      <span style="color:#d1d5db;font-size:18px;font-weight:300">|</span>
+      <span class="text-sm font-semibold text-gray-700">Demo Audit</span>
+    </div>
+    <div class="flex items-center gap-4">
+      <!-- Connection indicator -->
+      <div id="conn-indicator" class="flex items-center">
+        <span class="w-2 h-2 rounded-full bg-gray-300 inline-block"></span>
+        <span class="text-gray-400 text-xs ml-1.5">Disconnected</span>
+      </div>
+      <!-- Timer -->
+      <div class="flex items-center gap-1.5 text-xs text-gray-400">
+        <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <circle cx="12" cy="12" r="10" stroke-width="1.5"/>
+          <path stroke-linecap="round" stroke-width="1.5" d="M12 6v6l4 2"/>
+        </svg>
+        <span id="elapsed-timer" class="mono">00:00</span>
+      </div>
+      <!-- Back to dashboard -->
+      <a href="/static/dashboard.html"
+         class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-gray-200 hover:border-gray-400 transition"
+         style="border-radius:4px;color:#9ca3af;text-decoration:none">
+        ← Dashboard
+      </a>
+      <!-- Signed-in user (see /static/manage-users.html to grant access) -->
+      <div id="user-chip" class="text-xs text-gray-400"></div>
+      <!-- Deck management -->
+      <button id="deck-pill" onclick="openDeckModal()"
+              class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-gray-200 hover:border-gray-400 transition"
+              style="border-radius:4px;background:none;cursor:pointer;color:#9ca3af">
+        <span id="deck-pill-dot" class="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block"></span>
+        <span id="deck-pill-label">Deck: checking…</span>
+      </button>
+      <!-- Google Sheets status -->
+      <button id="gsheet-pill" onclick="openGoogleModal()"
+              class="flex items-center gap-1.5 text-xs px-2.5 py-1.5 border border-gray-200 hover:border-gray-400 transition"
+              style="border-radius:4px;background:none;cursor:pointer;color:#9ca3af">
+        <span id="gsheet-dot" class="w-1.5 h-1.5 rounded-full bg-gray-300 inline-block"></span>
+        <span id="gsheet-label">Sheets: checking…</span>
+      </button>
+      <!-- Sign out -->
+      <button onclick="signOut()"
+              class="text-xs text-gray-400 hover:text-gray-700 border border-gray-200 hover:border-gray-400 px-3 py-1.5 transition"
+              style="border-radius:4px;background:none;cursor:pointer">
+        Sign out
+      </button>
+    </div>
+  </header>
+
+  <!-- ── MAIN GRID ───────────────────────────────────────────────────────────── -->
+  <div id="main-grid">
+
+    <!-- ██ LEFT: Upload + Pipeline ███████████████████████████████████████████ -->
+    <aside id="left-sidebar" style="border-right:1px solid #f0f0f0">
+
+      <!-- Upload -->
+      <div class="card">
+        <div class="upload-tabs-bar flex bg-gray-100 rounded-lg p-0.5 mb-3 gap-0.5">
+          <button id="tab-link"       onclick="switchTab('link')"       class="upload-tab active">🔗 Link</button>
+          <button id="tab-csv"        onclick="switchTab('csv')"        class="upload-tab">📋 Batch</button>
+        </div>
+
+        <!-- Link -->
+        <div id="panel-link" class="space-y-2">
+          <label class="k-field-label">Associate (optional — applied to any line below with no label of its own)</label>
+          <input id="link-associate" type="text" class="k-input mb-1" placeholder="Search the roster…"/>
+          <p class="text-[11px] text-gray-400">Paste 1–20 Google Drive links, one per line</p>
+          <textarea id="links-input" class="k-input font-mono text-[11px]" rows="5"
+            placeholder="https://drive.google.com/file/d/ABC123/view&#10;https://drive.google.com/file/d/DEF456/view&#10;…"
+            style="resize:vertical;min-height:90px;line-height:1.6"></textarea>
+          <p class="text-[10px] text-gray-400">Or override per line: add a label after the URL separated by a comma<br>
+            e.g. <span class="font-mono text-gray-500">https://drive.google.com/…, Aryan Session 1</span></p>
+          <div id="links-validation" class="hidden text-[11px] rounded px-2 py-1"></div>
+          <label class="flex items-center gap-1.5 text-[11px] text-gray-600 mt-1">
+            <input type="checkbox" id="link-analyze-video" class="rounded"/>
+            🎥 Also analyze video (screenshots + participant detection) — optional, capped at 20 links when enabled
+          </label>
+          <button onclick="uploadLinks()" class="btn-primary" id="links-submit-btn">▶ Start Audit</button>
+          <p class="text-[10px] text-gray-400 text-center">Google Drive · Loom · Direct links · Max 20 per batch</p>
+        </div>
+
+        <!-- CSV -->
+        <div id="panel-csv" class="hidden space-y-2">
+          <p class="text-[11px] text-gray-400">CSV with a recording-link column (max 1000 rows) — this is also your lead sheet.</p>
+          <label class="flex items-center gap-1.5 text-[11px] text-gray-600 p-2 rounded" style="border:1px solid #fde68a;background:#fffbeb">
+            <input type="checkbox" id="csv-analyze-video" class="rounded"/>
+            🎥 Also analyze video for every row — optional, capped at 20 rows per batch (real per-video cost)
+          </label>
+          <p class="text-[10px] text-amber-600">↑ Tick this <b>before</b> choosing your file below — uploading starts immediately on file selection, so it's too late to enable this afterward (you can still trigger it per-audit afterward from that audit's detail page).</p>
+          <div id="csv-drop-zone" class="drop-zone"
+               onclick="document.getElementById('csv-input').click()"
+               ondragover="onCsvDragOver(event)" ondragleave="onCsvDragLeave(event)" ondrop="onCsvDrop(event)">
+            <p class="text-[11px] text-gray-500">📋 Drop CSV or click to browse</p>
+            <p class="text-[10px] text-gray-400 mt-0.5">Link column: url / link / demo link · Associate column: associate / lead owner</p>
+            <input id="csv-input" type="file" accept=".csv" class="hidden" onchange="uploadCsv(this.files[0])"/>
+          </div>
+          <p class="text-[10px] text-gray-400">Every other column (phone, TL name, demo date, payment status, whatever your CRM export has) rides along untouched — it auto-fills any matching Audit Tracker field and always shows in full on that audit's page, even if nothing matches.</p>
+          <button onclick="downloadCsvTemplate()" class="btn-secondary">↓ Download Template CSV</button>
+        </div>
+
+        <div id="upload-status" class="hidden mt-2 text-[11px] text-center text-gray-500"></div>
+      </div>
+
+      <!-- Upload / Queue — tucked away behind a toggle so it doesn't
+           clutter the main page; opens as a slide-in panel. Uploads never
+           auto-start; nothing here has consumed any Sarvam/OpenAI/GPU
+           resource yet. -->
+      <div class="card">
+        <button id="queue-toggle-btn" onclick="openQueueDrawer()"
+                class="w-full flex items-center justify-between text-[11px] px-3 py-2 border border-gray-300 rounded hover:border-gray-500"
+                style="background:none;cursor:pointer;color:#374151">
+          <span>📋 Queue</span>
+          <span id="queue-toggle-count" class="hidden text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full" style="background:var(--k-red)">0</span>
+        </button>
+      </div>
+
+      <!-- Upfront Auditing — jobs a worker has actually started on; stays
+           inline since it's active status, not a waiting list. -->
+      <div id="processing-box" class="card hidden">
+        <p class="sec-label mb-2">🎬 Upfront Auditing</p>
+        <div id="processing-list" class="space-y-1.5"></div>
+      </div>
+
+      <!-- Pipeline -->
+      <div id="pipeline-box" class="card">
+        <p class="sec-label">Pipeline</p>
+        <div class="space-y-1">
+          <div id="step-1" class="step-card"><div class="step-icon">①</div><div class="step-body"><div class="step-name">Audio Conversion</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-2" class="step-card"><div class="step-icon">②</div><div class="step-body"><div class="step-name">Chunking</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-3" class="step-card"><div class="step-icon">③</div><div class="step-body"><div class="step-name">Sarvam STT</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-4" class="step-card"><div class="step-icon">④</div><div class="step-body"><div class="step-name">Speaker Labels</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-5" class="step-card"><div class="step-icon">⑤</div><div class="step-body"><div class="step-name">Event Detection</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-6" class="step-card"><div class="step-icon">⑥</div><div class="step-body"><div class="step-name">GPT-4o Audit</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+          <div id="step-7" class="step-card"><div class="step-icon">⑦</div><div class="step-body"><div class="step-name">Scoring</div><div class="step-detail">Waiting…</div></div><div class="step-badge">–</div></div>
+        </div>
+      </div>
+
+      <!-- Recent sessions -->
+      <div id="recent-box" class="card hidden">
+        <p class="sec-label">Recent Sessions</p>
+        <div id="recent-list" class="space-y-1"></div>
+      </div>
+
+      <!-- Results mode bottom bar -->
+      <div id="new-audit-wrap" class="hidden mt-auto flex-col" style="flex-shrink:0;margin-top:auto">
+        <div class="px-4 py-4" style="border-top:1px solid #1f2937">
+          <button onclick="resetAndHome()" class="w-full flex items-center justify-center gap-2 py-2.5 text-xs font-semibold text-white"
+                  style="background:var(--k-red);border-radius:3px;border:none;cursor:pointer"
+                  onmouseover="this.style.background='var(--k-red-dark)'" onmouseout="this.style.background='var(--k-red)'">
+            <svg class="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/>
+            </svg>
+            New Audit
+          </button>
+        </div>
+      </div>
+    </aside>
+
+    <!-- Queue drawer — slides in from the left, over the sidebar, when the
+         Queue toggle button is clicked. -->
+    <div id="queue-drawer-backdrop" class="hidden" onclick="closeQueueDrawer()"></div>
+    <div id="queue-drawer">
+      <div class="flex items-center justify-between mb-3">
+        <p class="sec-label" style="margin:0">📋 Upload / Queue</p>
+        <button onclick="closeQueueDrawer()" class="text-gray-400 hover:text-gray-700" style="background:none;border:none;cursor:pointer;font-size:16px;line-height:1">✕</button>
+      </div>
+      <button id="start-all-btn" onclick="startAllQueued()" class="w-full text-[11px] px-2 py-1.5 border border-gray-300 rounded hover:border-gray-500 mb-3"
+              style="background:none;cursor:pointer;color:#374151">▶ Start All</button>
+      <div id="queue-list" class="space-y-1.5"></div>
+      <p id="queue-empty-note" class="hidden text-[11px] text-gray-400 text-center mt-4">Nothing queued right now.</p>
+    </div>
+
+    <!-- ██ CENTER ████████████████████████████████████████████████████████████ -->
+    <main id="center-main" style="border-right:1px solid #f0f0f0">
+
+      <!-- Back breadcrumb (results mode) -->
+      <div id="results-back-bar">
+        <button onclick="resetAndHome()">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M19 12H5M12 5l-7 7 7 7"/>
+          </svg>
+          Back
+        </button>
+        <span class="breadcrumb-sep">/</span>
+        <span class="breadcrumb-cur">Audit Results</span>
+      </div>
+
+      <!-- Score hero -->
+      <div id="score-card">
+        <div class="flex items-center gap-6">
+          <!-- Ring -->
+          <div class="relative flex-shrink-0" style="width:120px;height:120px">
+            <svg class="w-full h-full -rotate-90" viewBox="0 0 36 36">
+              <circle cx="18" cy="18" r="15.9" fill="none" stroke="#f3f4f6" stroke-width="2.5"/>
+              <circle id="score-ring" cx="18" cy="18" r="15.9" fill="none"
+                      stroke="#E8192C" stroke-width="2.5"
+                      stroke-dasharray="0 100" stroke-linecap="round"/>
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center">
+              <span id="score-num" class="font-black text-gray-900" style="font-size:2.4rem;line-height:1">–</span>
+              <span id="score-grade" class="text-sm font-bold text-gray-400">–</span>
+            </div>
+          </div>
+          <!-- Info -->
+          <div class="flex-1">
+            <p class="sec-label mb-1">Audit Score</p>
+            <p id="score-status" class="text-sm text-gray-400 mb-3">Upload a recording to begin</p>
+            <div class="grid grid-cols-4 gap-2">
+              <div class="stat-card"><div class="stat-val" id="stat-chunks-total">–</div><div class="stat-lbl">Chunks</div></div>
+              <div class="stat-card"><div class="stat-val" id="stat-chunks-done">0</div><div class="stat-lbl">Done</div></div>
+              <div class="stat-card"><div class="stat-val text-red-500" id="stat-chunks-fail">0</div><div class="stat-lbl">Failed</div></div>
+              <div class="stat-card"><div class="stat-val text-gray-500" id="stat-lang">–</div><div class="stat-lbl">Lang</div></div>
+            </div>
+          </div>
+          <!-- Utterances -->
+          <div class="flex-shrink-0 text-center card px-4 py-3" style="border:1px solid #f0f0f0;border-radius:3px">
+            <div class="stat-val" id="stat-utterances">0</div>
+            <div class="stat-lbl mt-1">Utterances</div>
+          </div>
+        </div>
+
+        <!-- STT progress -->
+        <div id="stt-progress-box" class="hidden mt-4">
+          <div class="flex items-center justify-between mb-1.5">
+            <span class="text-xs text-gray-500">Transcription Progress</span>
+            <span class="mono text-xs text-gray-700" id="stt-progress-label">0 / 0</span>
+          </div>
+          <div class="k-progress-track">
+            <div id="stt-progress-fill" class="k-progress-fill" style="width:0%"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Category breakdown -->
+      <div id="cat-scores" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <p class="sec-label">Category Breakdown</p>
+        <div id="cat-bars" class="grid grid-cols-2 gap-x-8 gap-y-0.5" style="max-height:400px;overflow-y:auto;padding-right:4px"></div>
+      </div>
+
+      <!-- Coaching feedback -->
+      <div id="coaching-box" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <p class="sec-label">Coaching Feedback</p>
+        <div id="coaching-content" class="grid grid-cols-3 gap-5 text-xs text-gray-600"></div>
+      </div>
+
+      <!-- Composite Score Breakdown -->
+      <div id="composite-box" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <p class="sec-label mb-2">🎯 Score Breakdown</p>
+        <div class="space-y-2 text-sm">
+          <div class="flex justify-between items-center">
+            <span class="text-gray-500">Behavioral (55%)</span>
+            <span id="comp-behavioral" class="font-semibold text-gray-800">—</span>
+          </div>
+          <div class="flex justify-between items-center">
+            <span class="text-gray-500">Deck Coverage (45%)</span>
+            <span id="comp-deck" class="font-semibold text-gray-800">—</span>
+          </div>
+          <div class="border-t border-gray-100 pt-2 flex justify-between items-center">
+            <span class="font-bold text-gray-900">Final Score</span>
+            <span id="comp-final" class="font-bold text-lg text-gray-900">—</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Video Snapshot & Participant Detection (optional add-on) -->
+      <div id="video-audit-box" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <p class="sec-label mb-2">🎥 Video Snapshot Analysis</p>
+        <div id="video-audit-content" class="text-xs text-gray-600"></div>
+      </div>
+
+      <!-- Participant Intelligence -->
+      <div id="participant-box" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <div class="flex items-center justify-between mb-3">
+          <p class="sec-label" style="margin:0">Participant Intelligence</p>
+          <span id="pi-quality-badge" class="text-[10px] font-semibold px-2 py-0.5 rounded-full" style="background:#f0fdf4;color:#16a34a;border:1px solid #bbf7d0">full</span>
+        </div>
+
+        <!-- Attendance row -->
+        <div class="flex gap-3 mb-3">
+          <div id="pi-att-student" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded" style="border:1px solid #e5e7eb;font-size:11px;flex:1">
+            <span id="pi-att-student-dot" style="width:7px;height:7px;border-radius:50%;background:#d1d5db;flex-shrink:0"></span>
+            <span class="text-gray-500">Student</span>
+            <span id="pi-att-student-val" class="ml-auto mono font-bold text-gray-400">—</span>
+          </div>
+          <div id="pi-att-parent" class="flex items-center gap-1.5 px-2.5 py-1.5 rounded" style="border:1px solid #e5e7eb;font-size:11px;flex:1">
+            <span id="pi-att-parent-dot" style="width:7px;height:7px;border-radius:50%;background:#d1d5db;flex-shrink:0"></span>
+            <span class="text-gray-500">Parent</span>
+            <span id="pi-att-parent-val" class="ml-auto mono font-bold text-gray-400">—</span>
+          </div>
+        </div>
+
+        <!-- Talk-time bars -->
+        <div id="pi-bars" class="space-y-1.5 mb-3"></div>
+
+        <!-- Engagement scores row -->
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <div class="stat-card text-center">
+            <div class="stat-val" id="pi-ses">–</div>
+            <div class="stat-lbl">Student Eng.</div>
+          </div>
+          <div class="stat-card text-center">
+            <div class="stat-val" id="pi-pes">–</div>
+            <div class="stat-lbl">Parent Eng.</div>
+          </div>
+          <div class="stat-card text-center">
+            <div class="stat-val" id="pi-scs">–</div>
+            <div class="stat-lbl">Coverage</div>
+          </div>
+        </div>
+
+        <!-- Flags -->
+        <div id="pi-flags" class="flex flex-wrap gap-1.5 mb-3 hidden"></div>
+
+        <!-- Narrative -->
+        <div id="pi-narrative" class="text-[11px] text-gray-500 leading-relaxed p-3 rounded" style="background:#fafafa;border:1px solid #f0f0f0;display:none"></div>
+      </div>
+
+      <!-- Downloads -->
+      <div id="download-box" class="hidden p-5">
+        <p class="sec-label">Download Report</p>
+        <div class="grid grid-cols-3 gap-2 mb-3">
+          <button id="btn-dl-pdf" class="dl-btn">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            PDF Report
+          </button>
+          <button id="btn-dl-excel" class="dl-btn">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 17v-2m3 2v-4m3 4v-6m2 10H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Excel
+          </button>
+          <button id="btn-dl-txt" class="dl-btn">
+            <svg class="w-3.5 h-3.5 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/></svg>
+            Transcript
+          </button>
+        </div>
+        <button id="btn-push-tracker" onclick="openTrackerModal(currentSessionId)"
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 mb-2 text-xs font-semibold text-white"
+                style="border-radius:4px;background:var(--k-red);border:none;cursor:pointer">
+          📤 Push to Audit Tracker
+        </button>
+        <button onclick="window.location.href='/api/v1/audit-records/download'"
+                class="w-full flex items-center justify-center gap-2 px-3 py-2 text-xs font-medium text-gray-600 border border-gray-200 hover:bg-gray-50"
+                style="border-radius:4px">
+          ↓ Download Master Excel
+        </button>
+      </div>
+
+      <!-- Batch panel -->
+      <div id="batch-panel" class="hidden p-5" style="border-bottom:1px solid #f3f4f6">
+        <div class="flex items-center justify-between mb-2">
+          <p class="sec-label mb-0">Batch Audit</p>
+          <span id="batch-counter" class="mono text-xs text-gray-500">0 / 0</span>
+        </div>
+        <table class="w-full text-xs">
+          <thead>
+            <tr class="border-b border-gray-100">
+              <th class="text-left px-2 py-1.5 font-medium text-gray-400">Label</th>
+              <th class="text-left px-2 py-1.5 font-medium text-gray-400">Status</th>
+              <th class="text-right px-2 py-1.5 font-medium text-gray-400">Score</th>
+              <th class="text-right px-2 py-1.5"></th>
+            </tr>
+          </thead>
+          <tbody id="batch-rows"></tbody>
+        </table>
+      </div>
+
+    </main>
+
+    <!-- ██ RIGHT: Audit cats + transcript + log ███████████████████████████████ -->
+    <aside class="flex flex-col">
+
+      <!-- GPT-4o audit categories -->
+      <div id="audit-progress-box" class="card hidden">
+        <p class="sec-label">GPT-4o — Categories</p>
+        <div id="audit-cats" class="space-y-1"></div>
+      </div>
+
+      <!-- Live transcript -->
+      <div class="card flex flex-col" style="flex:1">
+        <div class="flex items-center justify-between mb-2">
+          <p class="sec-label mb-0">Live Transcript</p>
+          <button onclick="document.getElementById('chunk-feed').innerHTML=''"
+                  class="text-[10px] text-gray-400 hover:text-gray-700 transition-colors">Clear</button>
+        </div>
+        <div id="chunk-feed" class="overflow-y-auto space-y-1.5 pr-0.5" style="max-height:300px"></div>
+      </div>
+
+      <!-- System log -->
+      <div class="card">
+        <p class="sec-label">System Log</p>
+        <div id="log-console" class="overflow-y-auto space-y-0.5" style="height:100px"></div>
+      </div>
+
+    </aside>
+
+  </div><!-- /main-grid -->
+
+  <!-- ██ Deck management modal ████████████████████████████████████████████████ -->
+  <div id="deck-modal" class="k-modal-overlay hidden" onclick="if(event.target===this) closeDeckModal()">
+    <div class="k-modal">
+      <div class="k-modal-header">
+        <h3>Decks</h3>
+        <button class="k-modal-close" onclick="closeDeckModal()">✕</button>
+      </div>
+      <div class="k-modal-body">
+        <p class="text-[11px] text-gray-500 mb-3">Upload a demo PPTX to generate its MUST / SHOULD / CAN evaluation framework with AI. Review the topics it found, then activate it — new audits score against whichever deck is Active.</p>
+
+        <div class="mb-4 p-3" style="background:#fafafa;border:1px solid #f0f0f0;border-radius:4px">
+          <label class="k-field-label">Upload new deck (.pptx)</label>
+          <input id="deck-file" type="file" accept=".pptx" class="k-input mb-2"/>
+          <input id="deck-name-input" type="text" placeholder="Deck name (optional — defaults to filename)" class="k-input mb-2"/>
+          <button id="btn-deck-upload" class="btn-primary" onclick="uploadDeck()">Upload &amp; Generate</button>
+          <p id="deck-upload-status" class="text-[11px] text-gray-500 mt-2"></p>
+        </div>
+
+        <p class="sec-label" style="margin-bottom:6px">All decks</p>
+        <div id="deck-list"><p class="text-xs text-gray-400">Loading…</p></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ██ Google Sheets connection modal ███████████████████████████████████████ -->
+  <div id="google-modal" class="k-modal-overlay hidden" onclick="if(event.target===this) closeGoogleModal()">
+    <div class="k-modal">
+      <div class="k-modal-header">
+        <h3>Google Sheets</h3>
+        <button class="k-modal-close" onclick="closeGoogleModal()">✕</button>
+      </div>
+      <div class="k-modal-body" id="google-modal-body">
+        <p class="text-xs text-gray-400">Loading…</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ██ Push-to-tracker modal ████████████████████████████████████████████████ -->
+  <div id="tracker-modal" class="k-modal-overlay hidden" onclick="if(event.target===this) closeTrackerModal()">
+    <div class="k-modal">
+      <div class="k-modal-header">
+        <h3>Push to Audit Tracker</h3>
+        <button class="k-modal-close" onclick="closeTrackerModal()">✕</button>
+      </div>
+      <div class="k-modal-body">
+        <p id="tracker-gsheet-note" class="text-[11px] text-gray-400 mb-2"></p>
+        <div class="flex items-center justify-between mb-3">
+          <button type="button" onclick="toggleTLMappingPanel()" class="text-[11px] text-gray-400 underline" style="background:none;border:none;cursor:pointer;padding:0">Manage Associate → TL mapping</button>
+          <span id="tl-map-status" class="text-[10px] text-gray-400"></span>
+        </div>
+        <div id="tl-map-panel" class="hidden mb-4 p-3" style="background:#fafafa;border:1px solid #f0f0f0;border-radius:4px">
+          <p class="text-[11px] text-gray-500 mb-2">Upload a CSV/XLSX with an Associate/Counsellor name column and a TL column —
+            "TL Name" will auto-fill from "Lead Owner" on every future row.</p>
+          <input id="tl-map-file" type="file" accept=".csv,.xlsx,.xls" class="k-input mb-2"/>
+          <button type="button" class="btn-secondary" style="width:auto;padding:6px 14px" onclick="uploadTLMapping()">Upload mapping</button>
+        </div>
+        <div id="tracker-fields" class="grid grid-cols-2 gap-x-3 gap-y-3">
+          <p class="text-xs text-gray-400 col-span-2">Loading…</p>
+        </div>
+        <button id="tracker-more-toggle" type="button" class="hidden text-[11px] text-gray-400 underline mt-4"
+                style="background:none;border:none;cursor:pointer;padding:0" onclick="toggleTrackerMore()"></button>
+        <div id="tracker-fields-more" class="hidden grid grid-cols-2 gap-x-3 gap-y-3 mt-3"></div>
+      </div>
+      <div class="k-modal-footer">
+        <button class="btn-secondary" style="width:auto;padding:8px 16px" onclick="closeTrackerModal()">Cancel</button>
+        <button id="btn-tracker-save" class="btn-primary" style="width:auto;padding:8px 16px" onclick="submitTrackerRow()">Save Row</button>
+      </div>
+    </div>
+  </div>
+
+</div><!-- /app -->
+
+
+<script>
+// ── Auth (real login — see auth.py / api/v1/auth/*) ──────────────────────────
+let CURRENT_USER = null;
+
+async function signOut() {
+  await fetch('/api/v1/auth/logout', { method: 'POST' });
+  window.location.href = '/static/login.html';
+}
+
+function bootApp() {
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('user-chip').textContent = `${CURRENT_USER.name} · ${CURRENT_USER.role}`;
+  loadRecentSessions();
+  checkGoogleStatus();
+  checkDeckPill();
+  loadAssociateRoster();
+  refreshQueue();
+  setInterval(refreshQueue, 4000);
+  addLog('Kalvium Demo Audit ready — drop a recording to begin.', 'info');
+}
+
+// ── Upload / Queue — uploads never auto-start; a click on Start (or Start
+// All) is what actually hands the job to the existing processing pipeline.
+const STAGE_LABELS = {
+  queued: 'QUEUED', starting: 'WAITING FOR A FREE WORKER…', processing: 'PROCESSING',
+  completed: 'COMPLETED', failed: 'FAILED',
+};
+let _watchedProcessingIds = new Set();  // jobs we've already attached a WS to
+
+async function refreshQueue() {
+  try {
+    const res = await fetch('/api/v1/queue');
+    if (!res.ok) return;
+    const data = await res.json();
+    renderQueueList(data.queued || []);
+    renderProcessingList(data.processing || []);
+  } catch (e) { /* transient — next poll will retry */ }
+}
+
+function _fmtWhen(iso) {
+  if (!iso) return '';
+  try { return new Date(iso).toLocaleString([], {day:'2-digit', month:'short', hour:'2-digit', minute:'2-digit'}); }
+  catch { return iso; }
+}
+
+function openQueueDrawer() {
+  document.getElementById('queue-drawer').classList.add('open');
+  document.getElementById('queue-drawer-backdrop').classList.remove('hidden');
+  refreshQueue();
+}
+
+function closeQueueDrawer() {
+  document.getElementById('queue-drawer').classList.remove('open');
+  document.getElementById('queue-drawer-backdrop').classList.add('hidden');
+}
+
+function renderQueueList(jobs) {
+  const list = document.getElementById('queue-list');
+  const emptyNote = document.getElementById('queue-empty-note');
+  const countBadge = document.getElementById('queue-toggle-count');
+
+  countBadge.textContent = jobs.length;
+  countBadge.classList.toggle('hidden', jobs.length === 0);
+
+  if (!jobs.length) { list.innerHTML = ''; emptyNote.classList.remove('hidden'); return; }
+  emptyNote.classList.add('hidden');
+  list.innerHTML = jobs.map(j => {
+    const isStarting = j.status === 'starting';
+    return `<div class="queue-card">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-[11px] font-semibold text-gray-700">${escapeHtml(j.label || j.filename || j.job_id.slice(0,8))}</div>
+          <div class="text-[10px] text-gray-400">Uploaded ${escapeHtml(_fmtWhen(j.created_at))} · ${escapeHtml(STAGE_LABELS[j.status] || j.status)}</div>
+        </div>
+        <div class="flex gap-1">
+          ${isStarting ? '' : `<button onclick="startQueuedJob('${j.job_id}')" class="queue-btn queue-btn-start">▶ Start</button>`}
+          ${isStarting ? '' : `<button onclick="removeQueuedJob('${j.job_id}')" class="queue-btn queue-btn-remove">🗑</button>`}
+        </div>
+      </div>
+      ${isStarting ? '<div class="text-[10px] text-amber-600 mt-1">Already told to start — will begin the moment one of the 4 worker slots frees up.</div>' : ''}
+    </div>`;
+  }).join('');
+}
+
+function renderProcessingList(jobs) {
+  const box = document.getElementById('processing-box');
+  const list = document.getElementById('processing-list');
+  if (!jobs.length) { box.classList.add('hidden'); list.innerHTML = ''; return; }
+  box.classList.remove('hidden');
+  list.innerHTML = jobs.map(j => `
+    <div class="queue-card processing-card" onclick="watchProcessingJob('${j.job_id}')">
+      <div class="flex items-center justify-between">
+        <div>
+          <div class="text-[11px] font-semibold text-gray-700">${escapeHtml(j.label || j.job_id.slice(0,8))}</div>
+          <div class="text-[10px] text-gray-400">Started ${escapeHtml(_fmtWhen(j.started_at))}</div>
+        </div>
+        <div class="flex items-center gap-2">
+          <span class="text-[10px] font-bold" style="color:#d97706">● PROCESSING</span>
+          <button onclick="event.stopPropagation(); watchProcessingJob('${j.job_id}')" class="queue-btn queue-btn-start" title="Watch this audit's live progress">▶</button>
+          <button onclick="event.stopPropagation(); cancelProcessingJob('${j.job_id}')" class="queue-btn queue-btn-remove" title="Hide from view — the background job may still finish and land in Audit History">🗑</button>
+        </div>
+      </div>
+    </div>`).join('');
+
+  // Auto-attach live progress the first time we see a job we haven't
+  // watched yet in this tab — reuses the existing WS/progress UI as-is.
+  jobs.forEach(j => {
+    if (!_watchedProcessingIds.has(j.job_id) && !currentSessionId) {
+      _watchedProcessingIds.add(j.job_id);
+      watchProcessingJob(j.job_id);
+    }
+  });
+}
+
+function watchProcessingJob(jobId) {
+  _watchedProcessingIds.add(jobId);
+  resetUI();
+  sessionId = currentSessionId = jobId;
+  startTimer();
+  connectWebSocket(jobId);
+  document.getElementById('upload-status').classList.remove('hidden');
+  document.getElementById('upload-status').textContent = `Watching ${jobId.slice(0,8)}…`;
+}
+
+async function startQueuedJob(jobId) {
+  try {
+    const res = await fetch(`/api/v1/queue/${jobId}/start`, {method: 'POST'});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Failed to start');
+    addLog(`▶ Started ${jobId.slice(0,8)}`, 'info');
+    refreshQueue();
+  } catch (e) { addLog(`Start failed: ${e.message}`, 'error'); }
+}
+
+async function startAllQueued() {
+  try {
+    const res = await fetch('/api/v1/queue/start-all', {method: 'POST'});
+    const data = await res.json();
+    addLog(`▶ Start All: ${data.count} job(s) submitted (existing worker capacity throttles how many run at once)`, 'info');
+    refreshQueue();
+  } catch (e) { addLog(`Start All failed: ${e.message}`, 'error'); }
+}
+
+async function removeQueuedJob(jobId) {
+  if (!confirm('Remove this queued audit? This cannot be undone.')) return;
+  try {
+    const res = await fetch(`/api/v1/queue/${jobId}`, {method: 'DELETE'});
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed to remove'); }
+    addLog(`🗑 Removed ${jobId.slice(0,8)} from queue`, 'info');
+    refreshQueue();
+  } catch (e) { addLog(`Remove failed: ${e.message}`, 'error'); }
+}
+
+async function cancelProcessingJob(jobId) {
+  if (!confirm("Hide this from Upfront Auditing? Note: the background job can't be safely interrupted mid-transcription, so it may still finish and land in Audit History — this only removes it from this view.")) return;
+  try {
+    const res = await fetch(`/api/v1/queue/${jobId}/cancel?actor=${encodeURIComponent(getActorName())}`, {method: 'POST'});
+    if (!res.ok) { const d = await res.json(); throw new Error(d.detail || 'Failed to cancel'); }
+    addLog(`🗑 Hid ${jobId.slice(0,8)} from Upfront Auditing (background job may still complete)`, 'info');
+    if (currentSessionId === jobId) { resetUI(); currentSessionId = sessionId = null; }
+    refreshQueue();
+  } catch (e) { addLog(`Cancel failed: ${e.message}`, 'error'); }
+}
+
+// ── Associate roster picker (admin-managed list — see Manage Users) ─────────
+let ASSOCIATE_ROSTER = [];
+
+async function loadAssociateRoster() {
+  try {
+    const res = await fetch('/api/v1/associate-roster');
+    const data = await res.json();
+    ASSOCIATE_ROSTER = data.names || [];
+    attachAssociatePicker(document.getElementById('link-associate'));
+  } catch (e) { ASSOCIATE_ROSTER = []; }
+}
+
+function attachAssociatePicker(inputEl) {
+  if (!inputEl || inputEl.dataset.pickerAttached) return;
+  inputEl.dataset.pickerAttached = '1';
+  inputEl.setAttribute('autocomplete', 'off');
+
+  const wrap = document.createElement('div');
+  wrap.style.position = 'relative';
+  inputEl.parentNode.insertBefore(wrap, inputEl);
+  wrap.appendChild(inputEl);
+
+  const list = document.createElement('div');
+  list.className = 'assoc-picker-list hidden';
+  wrap.appendChild(list);
+
+  function renderList(filter) {
+    const q = (filter || '').toLowerCase();
+    const matches = ASSOCIATE_ROSTER.filter(n => n.toLowerCase().includes(q)).slice(0, 8);
+    list.innerHTML = matches.length
+      ? matches.map(n => `<div class="assoc-picker-item" data-name="${escapeHtml(n)}">${escapeHtml(n)}</div>`).join('')
+      : `<div class="assoc-picker-empty">No match in the roster — ask an admin to add this name under Manage Users</div>`;
+    list.classList.remove('hidden');
+  }
+
+  inputEl.addEventListener('focus', () => renderList(inputEl.value));
+  inputEl.addEventListener('input', () => renderList(inputEl.value));
+  inputEl.addEventListener('blur', () => {
+    setTimeout(() => {
+      list.classList.add('hidden');
+      if (inputEl.value && !ASSOCIATE_ROSTER.includes(inputEl.value)) {
+        inputEl.value = '';
+        inputEl.classList.add('assoc-picker-invalid');
+        setTimeout(() => inputEl.classList.remove('assoc-picker-invalid'), 1200);
+      }
+    }, 150); // let a click on a suggestion register first
+  });
+  list.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.assoc-picker-item');
+    if (!item) return;
+    inputEl.value = item.dataset.name;
+    list.classList.add('hidden');
+    inputEl.dispatchEvent(new Event('change'));
+  });
+}
+
+// ── State ──────────────────────────────────────────────────────────────────
+let ws = null, sessionId = null, currentSessionId = null;
+let startTime = null, timerInterval = null;
+let chunkTotal = 0, chunkDone = 0, chunkFail = 0;
+const explainableData = {};
+let _batchPollInterval = null;
+
+const CATEGORIES = [
+  {id:'rapport_building',      label:'Opening & Rapport'},
+  {id:'discovery_questions',   label:'Need Discovery'},
+  {id:'product_explanation',   label:'Kalvium Program Pitch'},
+  {id:'closing_skills',        label:'KNET Pitch & CTA'},
+  {id:'placement_credibility', label:'Placement & Career Story'},
+  {id:'fee_discussion',        label:'Fee & ROI Discussion'},
+  {id:'two_way_communication', label:'Engagement & Listening'},
+  {id:'trust_building',        label:'Trust & Credibility'},
+  {id:'follow_up_clarity',     label:'Follow-up & Next Steps'},
+];
+
+function scoreColor(s) { return s >= 7 ? '#16a34a' : s >= 5 ? '#d97706' : '#dc2626'; }
+
+// ── Upload — File ──────────────────────────────────────────────────────────
+function onDragOver(e) { e.preventDefault(); document.getElementById('drop-zone').classList.add('dragging'); }
+function onDragLeave() { document.getElementById('drop-zone').classList.remove('dragging'); }
+function onDrop(e)     { e.preventDefault(); document.getElementById('drop-zone').classList.remove('dragging'); const f=e.dataTransfer.files[0]; if(f) uploadFile(f); }
+
+async function uploadFile(file) {
+  if (!file) return;
+  resetUI();
+  const st = document.getElementById('upload-status');
+  st.textContent = `Uploading ${file.name} (${(file.size/1024/1024).toFixed(1)} MB)…`;
+  st.classList.remove('hidden');
+  const form = new FormData();
+  form.append('file', file);
+  form.append('actor', getActorName());
+  try {
+    const res = await fetch('/api/v1/audit/upload', {method:'POST', body:form});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Upload failed');
+    st.textContent = `✓ Added to queue — ${data.session_id.slice(0,8)}… click ▶ Start when ready`;
+    addLog(`Queued: ${file.name}`, 'info');
+    refreshQueue();
+  } catch (err) { st.textContent = `Error: ${err.message}`; addLog(err.message, 'error'); }
+}
+
+// ── Upload — Multiple Links ────────────────────────────────────────────────
+function parseLinksInput(raw) {
+  // Each line: URL [, optional label] — falls back to the Associate picker's
+  // value above the textarea when a line doesn't specify its own label.
+  const defaultAssociate = (document.getElementById('link-associate')?.value || '').trim();
+  return raw.split('\n')
+    .map(l => l.trim()).filter(Boolean)
+    .map(line => {
+      const commaIdx = line.search(/,(?!\s*\/\/)/); // comma not inside URL
+      if (commaIdx > 0) {
+        return { url: line.slice(0, commaIdx).trim(), label: line.slice(commaIdx + 1).trim() };
+      }
+      return { url: line, label: defaultAssociate || undefined };
+    })
+    .filter(item => item.url.startsWith('http'));
+}
+
+// ── Video Snapshot & Participant Detection — optional add-on polling ───────
+function renderVideoAuditContent(rec) {
+  const box = document.getElementById('video-audit-box');
+  const content = document.getElementById('video-audit-content');
+  box.classList.remove('hidden');
+
+  const statusLabels = {
+    queued: 'Queued', downloading: 'Downloading video…', reading_duration: 'Reading duration…',
+    extracting: 'Extracting screenshots…', analyzing: 'Analyzing (GPT-4o vision)…',
+    summarizing: 'Summarizing…', completed: 'Completed', failed: 'Failed',
+  };
+
+  if (rec.status === 'failed') {
+    content.innerHTML = `<p class="text-red-500">Failed: ${escapeHtml(rec.error || 'unknown error')}</p>`;
+    return;
+  }
+  if (rec.status !== 'completed') {
+    content.innerHTML = `<p class="text-gray-500">${escapeHtml(statusLabels[rec.status] || rec.status)}…</p>`;
+    return;
+  }
+
+  const s = rec.summary || {};
+  const tf = s.tracker_fields || {};
+  const shots = rec.screenshots || [];
+  const flagsHtml = (s.flags || []).length
+    ? `<ul class="mb-3 pl-4" style="list-style:disc;color:#dc2626">${s.flags.map(f=>`<li>${escapeHtml(f)}</li>`).join('')}</ul>` : '';
+
+  const trackerPairs = [
+    ['Demo Attendees', tf['Demo Attendees']],
+    ['Camera Status', tf['Camera Status']],
+    ['Deck Presentation', tf['Deck Presentation']],
+    ['Screen-share Mode', tf['Screen-share Mode (Full screen / PiP)']],
+  ];
+  const trackerHtml = `<div class="grid grid-cols-2 gap-x-4 gap-y-1 mb-3 text-[11px]">${
+    trackerPairs.map(([k,v]) => `<div class="flex justify-between border-b border-gray-100 pb-1"><span class="text-gray-400">${escapeHtml(k)}</span><span class="font-semibold">${escapeHtml(v || '—')}</span></div>`).join('')
+  }</div>`;
+
+  const thumbs = shots.map(shot => {
+    if (!shot.filename) {
+      return `<div class="video-thumb-cell"><div class="video-thumb-fail">✕ ${escapeHtml(shot.label)}<br>extraction failed</div></div>`;
+    }
+    const a = shot.analysis || {};
+    if (a.error) {
+      return `<div class="video-thumb-cell">
+        <img src="/api/v1/video-audit/${rec.id}/screenshot/${shot.filename}" loading="lazy" class="video-thumb-img"/>
+        <div class="video-thumb-label">${escapeHtml(shot.label)}</div>
+        <div class="video-thumb-badge"><span style="color:#dc2626">analysis failed</span></div>
+      </div>`;
+    }
+    return `<div class="video-thumb-cell">
+      <img src="/api/v1/video-audit/${rec.id}/screenshot/${shot.filename}" loading="lazy" class="video-thumb-img"/>
+      <div class="video-thumb-label">${escapeHtml(shot.label)}</div>
+      <div class="video-thumb-badge">
+        <div><b>People:</b> ${a.people_count ?? '—'}</div>
+        <div><b>Slides:</b> ${a.slides_presented ? 'Yes' : 'No'}</div>
+      </div>
+    </div>`;
+  }).join('');
+
+  content.innerHTML = `
+    <p class="text-[10px] text-gray-400 mb-2">${shots.length} screenshots${rec.duration_seconds ? ` · ${Math.round(rec.duration_seconds)}s video` : ''} — tracker fields auto-filled from this evidence:</p>
+    ${trackerHtml}
+    ${flagsHtml}
+    <div class="video-thumb-grid">${thumbs}</div>
+    <style>
+      .video-thumb-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:8px;margin-top:6px}
+      .video-thumb-cell{border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;font-size:10px}
+      .video-thumb-img{width:100%;display:block;aspect-ratio:16/9;object-fit:cover;background:#f3f4f6}
+      .video-thumb-fail{aspect-ratio:16/9;display:flex;align-items:center;justify-content:center;text-align:center;color:#ef4444;background:#fef2f2;padding:4px}
+      .video-thumb-label{padding:2px 6px;font-weight:600;color:#6b7280}
+      .video-thumb-badge{padding:0 6px 6px;color:#374151;line-height:1.5}
+    </style>`;
+}
+
+async function pollVideoAudit(videoAuditId, _lastStatus) {
+  try {
+    const res = await fetch(`/api/v1/video-audit/${videoAuditId}`);
+    if (!res.ok) return; // job row not found yet / transient — just stop quietly
+    const rec = await res.json();
+    if (rec.status !== _lastStatus) {
+      addLog(`🎥 Video analysis: ${rec.status.replace(/_/g, ' ')}`, 'info');
+    }
+    renderVideoAuditContent(rec);
+    if (rec.status === 'completed') {
+      const s = rec.summary || {};
+      addLog(`🎥 Video analysis done — ${s.frames_analyzed || 0}/5 frames analyzed` +
+              (s.flags && s.flags.length ? `. Flags: ${s.flags.join('; ')}` : ''), 'info');
+      return;
+    }
+    if (rec.status === 'failed') {
+      addLog(`🎥 Video analysis failed: ${rec.error || 'unknown error'}`, 'warn');
+      return;
+    }
+    setTimeout(() => pollVideoAudit(videoAuditId, rec.status), 4000);
+  } catch (err) {
+    // network hiccup — don't spam retries forever
+  }
+}
+
+async function uploadLinks() {
+  const raw = document.getElementById('links-input').value;
+  const links = parseLinksInput(raw);
+  const validEl = document.getElementById('links-validation');
+
+  if (!links.length) {
+    validEl.textContent = '⚠ No valid URLs found. Each line should start with https://';
+    validEl.className = 'text-[11px] rounded px-2 py-1 bg-yellow-50 text-yellow-700';
+    validEl.classList.remove('hidden'); return;
+  }
+  if (links.length > 20) {
+    validEl.textContent = `⚠ Max 20 links per batch (you have ${links.length})`;
+    validEl.className = 'text-[11px] rounded px-2 py-1 bg-yellow-50 text-yellow-700';
+    validEl.classList.remove('hidden'); return;
+  }
+
+  validEl.textContent = `✓ ${links.length} link${links.length > 1 ? 's' : ''} parsed`;
+  validEl.className = 'text-[11px] rounded px-2 py-1 bg-green-50 text-green-700';
+  validEl.classList.remove('hidden');
+
+  resetUI();
+  const st = document.getElementById('upload-status');
+  st.classList.remove('hidden');
+
+  // Single link — enqueue only. Nothing starts until ▶ Start is clicked
+  // in the Upload/Queue section (or ▶ Start All).
+  if (links.length === 1) {
+    st.textContent = 'Adding to queue…';
+    try {
+      const analyzeVideo = document.getElementById('link-analyze-video')?.checked || false;
+      const res = await fetch('/api/v1/audit/upload-url', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({url: links[0].url, label: links[0].label || undefined, actor: getActorName(), analyze_video: analyzeVideo})
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Failed');
+      st.textContent = `✓ Added to queue — ${data.session_id.slice(0,8)}… click ▶ Start when ready`;
+      addLog(`Queued: ${links[0].url.slice(0,60)}`, 'info');
+      document.getElementById('links-input').value = '';
+      validEl.classList.add('hidden');
+      refreshQueue();
+    } catch (err) {
+      st.textContent = `Error: ${err.message}`;
+      addLog(err.message, 'error');
+    }
+    return;
+  }
+
+  // Multiple links — enqueue each; none start until Start/Start All is clicked.
+  const analyzeVideoBatch = document.getElementById('link-analyze-video')?.checked || false;
+  if (analyzeVideoBatch && links.length > 20) {
+    validEl.textContent = `⚠ Video analysis is capped at 20 links per batch (you have ${links.length}) — uncheck it or split the batch`;
+    validEl.className = 'text-[11px] rounded px-2 py-1 bg-yellow-50 text-yellow-700';
+    validEl.classList.remove('hidden'); return;
+  }
+  st.textContent = `Adding ${links.length} links to queue…`;
+  try {
+    const res = await fetch('/api/v1/audit/upload-links', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({links, actor: getActorName(), analyze_video: analyzeVideoBatch})
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Batch submit failed');
+
+    const batchId = data.batch_id;
+    const queued  = data.queued;
+    const skipped = data.skipped;
+
+    st.textContent = `✓ Added to queue: ${queued} link(s) (${skipped} skipped)`;
+    addLog(`Batch ${batchId.slice(0,8)}: ${queued} links queued — none started yet`, 'info');
+    if (data.errors?.length) {
+      data.errors.forEach(e => addLog(`Link ${e.index+1} skipped: ${e.error}`, 'warn'));
+    }
+    document.getElementById('links-input').value = '';
+    validEl.classList.add('hidden');
+    refreshQueue();
+  } catch (err) {
+    st.textContent = `Error: ${err.message}`;
+    addLog(err.message, 'error');
+  }
+}
+
+// ── Batch monitor (multi-link) ─────────────────────────────────────────────
+function showBatchMonitor(batchId, sessionIds) {
+  const existing = document.getElementById('batch-monitor');
+  if (existing) existing.remove();
+
+  const mon = document.createElement('div');
+  mon.id = 'batch-monitor';
+  mon.className = 'mt-3 rounded-lg border border-gray-200 bg-gray-50 p-3 text-[11px]';
+  mon.innerHTML = `
+    <div class="flex items-center justify-between mb-2">
+      <span class="font-semibold text-gray-700">Batch ${batchId.slice(0,8)} — ${sessionIds.length} recordings</span>
+      <button onclick="document.getElementById('batch-monitor').remove()" class="text-gray-400 hover:text-gray-600 text-xs">✕</button>
+    </div>
+    <div id="batch-rows" class="space-y-1"></div>
+    <p class="text-gray-400 mt-2 text-[10px]">Click a session to open its audit report</p>
+  `;
+
+  // Insert below upload-status
+  const st = document.getElementById('upload-status');
+  st.parentNode.insertBefore(mon, st.nextSibling);
+
+  // Populate rows
+  const rowsEl = document.getElementById('batch-rows');
+  sessionIds.forEach((sid, i) => {
+    const row = document.createElement('div');
+    row.id = `batch-row-${sid}`;
+    row.className = 'flex items-center gap-2 cursor-pointer hover:bg-white rounded px-1 py-0.5';
+    row.onclick = () => openBatchSession(sid);
+    row.innerHTML = `
+      <span class="text-gray-400 w-4">${i+1}</span>
+      <span id="batch-icon-${sid}" class="text-yellow-500">⏳</span>
+      <span class="font-mono text-gray-600">${sid.slice(0,8)}</span>
+      <span id="batch-status-${sid}" class="text-gray-400 ml-auto">queued</span>
+    `;
+    rowsEl.appendChild(row);
+  });
+
+  // Poll batch status every 8 seconds
+  const poll = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/v1/batch/${batchId}`);
+      const data = await res.json();
+      data.sessions.forEach(s => {
+        const iconEl   = document.getElementById(`batch-icon-${s.session_id}`);
+        const statusEl = document.getElementById(`batch-status-${s.session_id}`);
+        if (!iconEl) return;
+        if (s.status === 'completed') {
+          iconEl.textContent = '✅';
+          statusEl.textContent = s.score ? `${s.score}/100 (${s.grade})` : 'done';
+          statusEl.className = 'text-green-600 font-semibold ml-auto';
+        } else if (s.status === 'failed') {
+          iconEl.textContent = '❌';
+          statusEl.textContent = 'failed';
+          statusEl.className = 'text-red-500 ml-auto';
+        } else if (s.status === 'processing') {
+          iconEl.textContent = '🔄';
+          statusEl.textContent = 'processing';
+          statusEl.className = 'text-blue-500 ml-auto';
+        } else if (s.status === 'downloading') {
+          iconEl.textContent = '⬇️';
+          statusEl.textContent = 'downloading';
+          statusEl.className = 'text-purple-500 ml-auto';
+        }
+      });
+      if (data.completed + data.failed >= data.total) clearInterval(poll);
+    } catch (_) {}
+  }, 8000);
+}
+
+function renderResults(data) {
+  if (!data?.score) return;
+  const fakeEv = {
+    overall: data.score.overall,
+    grade:   data.score.grade,
+    scores:  Object.fromEntries(Object.entries(data.score.category_scores||{}).map(([k,v])=>[k,v.raw_score])),
+    highlights:   data.coaching_highlights||[],
+    strengths:    data.top_strengths||[],
+    improvements: data.improvement_areas||[],
+    explainable:  data.llm_evaluations||[],
+    composite:    data.composite_score || null,
+  };
+  showScorecard(fakeEv);
+  showDownloadButtons(data.session_id);
+  if (data.participant_intelligence) renderParticipantIntelligence(data.participant_intelligence);
+}
+
+function openBatchSession(sid) {
+  sessionId = currentSessionId = sid;
+  resetUI();
+  connectWebSocket(sid);
+  fetch(`/api/v1/audit/${sid}`).then(r => r.json()).then(data => {
+    if (data.score) renderResults(data);
+  }).catch(() => {});
+}
+
+async function fetchParticipantIntelligence(sid, attempt) {
+  if (!sid) return;
+  attempt = attempt || 0;
+  try {
+    const res = await fetch(`/api/v1/audit/${sid}/participation`);
+    if (res.status === 409 && attempt < 4) {
+      setTimeout(() => fetchParticipantIntelligence(sid, attempt + 1), 3000);
+      return;
+    }
+    if (!res.ok) return;
+    const pi = await res.json();
+    renderParticipantIntelligence(pi);
+  } catch(_) {}
+}
+
+// ── Upload — Text transcript ────────────────────────────────────────────────
+function onTxtDragOver(e)  { e.preventDefault(); document.getElementById('txt-drop-zone').classList.add('dragging'); }
+function onTxtDragLeave()  { document.getElementById('txt-drop-zone').classList.remove('dragging'); }
+function onTxtDrop(e)      { e.preventDefault(); document.getElementById('txt-drop-zone').classList.remove('dragging'); const f=e.dataTransfer.files[0]; if(f) uploadTranscriptFile(f); }
+
+async function uploadTranscriptFile(file) {
+  if (!file) return;
+  if (!file.name.toLowerCase().endsWith('.txt')) { alert('Please upload a .txt file.'); return; }
+  document.getElementById('txt-drop-label').textContent = `📄 ${file.name}`;
+  const st = document.getElementById('upload-status');
+  st.classList.remove('hidden'); st.textContent = 'Uploading transcript…';
+  try {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('actor', getActorName());
+    const res = await fetch('/api/v1/audit/upload-transcript', {method:'POST', body:form});
+    if (!res.ok) { const e = await res.json(); throw new Error(e.detail || res.statusText); }
+    const data = await res.json();
+    st.textContent = `✓ Added to queue — ${data.session_id.slice(0,8)}… click ▶ Start when ready`;
+    addLog(`Queued transcript: ${file.name}`, 'info');
+    refreshQueue();
+  } catch(e) { st.textContent = `Error: ${e.message}`; }
+}
+
+// ── Upload — CSV Batch ─────────────────────────────────────────────────────
+function onCsvDragOver(e) { e.preventDefault(); document.getElementById('csv-drop-zone').classList.add('dragging'); }
+function onCsvDragLeave() { document.getElementById('csv-drop-zone').classList.remove('dragging'); }
+function onCsvDrop(e)     { e.preventDefault(); document.getElementById('csv-drop-zone').classList.remove('dragging'); const f=e.dataTransfer.files[0]; if(f) uploadCsv(f); }
+
+async function uploadCsv(file) {
+  if (!file) return;
+  const st = document.getElementById('upload-status');
+  st.textContent = `Reading ${file.name}…`; st.classList.remove('hidden');
+  const form = new FormData(); form.append('file', file);
+  form.append('actor', getActorName());
+  form.append('analyze_video', document.getElementById('csv-analyze-video')?.checked ? 'true' : 'false');
+  try {
+    const res = await fetch('/api/v1/audit/upload-csv', {method:'POST', body:form});
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Batch failed');
+    const {batch_id, queued, skipped, errors, off_roster_names} = data;
+    st.textContent = `✓ Added to queue: ${queued} row(s)${skipped?`, ${skipped} skipped`:''} — none started yet`;
+    addLog(`Batch ${batch_id.slice(0,8)}: ${queued} rows queued — click ▶ Start or ▶ Start All when ready`, 'success');
+    if (errors?.length) errors.forEach(e => addLog(`Row ${e.row}: ${e.error}`, 'warn'));
+    if (off_roster_names?.length) addLog(`Not on the roster (still queued): ${off_roster_names.join(', ')}`, 'warn');
+    refreshQueue();
+  } catch (err) { st.textContent = `Error: ${err.message}`; addLog(err.message, 'error'); }
+}
+
+function startBatchPoll(batchId, total) {
+  clearInterval(_batchPollInterval);
+  document.getElementById('batch-counter').textContent = `0 / ${total}`;
+  _batchPollInterval = setInterval(async () => {
+    try {
+      const res = await fetch(`/api/v1/batch/${batchId}`); if (!res.ok) return;
+      const b = await res.json(); renderBatchTable(b);
+      if (b.completed + b.failed >= b.total) { clearInterval(_batchPollInterval); addLog(`Batch done: ${b.completed}/${b.total}`, 'success'); }
+    } catch(_) {}
+  }, 4000);
+}
+
+function renderBatchTable(b) {
+  document.getElementById('batch-counter').textContent = `${b.completed} / ${b.total}`;
+  const tbody = document.getElementById('batch-rows'); tbody.innerHTML = '';
+  b.sessions.forEach(s => {
+    const dot = s.status==='completed'?'#16a34a':s.status==='failed'?'#dc2626':s.status==='processing'?'#E8192C':'#d97706';
+    const sc = s.score != null ? `<span style="color:${s.score>=70?'#16a34a':s.score>=55?'#d97706':'#dc2626'}" class="mono font-bold">${s.score}/100</span>` : '<span class="text-gray-300">—</span>';
+    const vb = s.status==='completed' ? `<button onclick="viewBatchSession('${s.session_id}')" class="text-gray-500 hover:text-gray-900 text-[10px]">View ▸</button>` : '';
+    const tr = document.createElement('tr');
+    tr.innerHTML = `<td style="padding:7px 10px"><div class="batch-label flex items-center gap-1"><span class="batch-status-dot" style="background:${dot}"></span>${escapeHtml(s.label||s.session_id.slice(0,8))}</div></td><td class="text-gray-400" style="padding:7px 10px">${s.status}</td><td class="text-right" style="padding:7px 10px">${sc}</td><td class="text-right" style="padding:7px 10px">${vb}</td>`;
+    tbody.appendChild(tr);
+  });
+}
+
+async function viewBatchSession(sid) {
+  currentSessionId = sid; await fetchExplainableData(sid);
+  const res = await fetch(`/api/v1/audit/${sid}`); if (!res.ok) return;
+  const report = await res.json();
+  if (report.score) {
+    const fakeEv = {overall:report.score.overall,grade:report.score.grade,scores:Object.fromEntries(Object.entries(report.score.category_scores).map(([k,v])=>[k,v.raw_score])),highlights:report.coaching_highlights||[],strengths:report.top_strengths||[],improvements:report.improvement_areas||[],explainable:report.llm_evaluations||[]};
+    showScorecard(fakeEv); showDownloadButtons(sid);
+    addLog(`Loaded ${sid.slice(0,8)}: ${report.score.overall}/100`, 'info');
+  }
+}
+
+function downloadCsvTemplate() {
+  const csv = `Demo link,Lead Owner,TL Name,Phone Number,Lead link,Demo Date,Payment Done\nhttps://drive.google.com/file/d/YOUR_FILE_ID/view,Associate Name,TL Name,9876543210,https://your-crm.com/lead/123,2026-01-15 10:00:00,No\n`;
+  const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([csv],{type:'text/csv'}));
+  a.download = 'audit_batch_template.csv'; a.click();
+}
+
+// ── Tab switcher ───────────────────────────────────────────────────────────
+function switchTab(tab) {
+  ['link','csv'].forEach(t => {
+    document.getElementById(`tab-${t}`).classList.toggle('active', t === tab);
+    document.getElementById(`panel-${t}`).classList.toggle('hidden', t !== tab);
+  });
+}
+
+// ── WebSocket ──────────────────────────────────────────────────────────────
+function connectWebSocket(sid) {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}/ws/${sid}`);
+  ws.onopen  = () => setConnected(true);
+  ws.onclose = () => setConnected(false);
+  ws.onerror = () => { setConnected(false); addLog('WebSocket error', 'error'); };
+  ws.onmessage = e => handleEvent(JSON.parse(e.data));
+}
+
+function setConnected(on) {
+  document.getElementById('conn-indicator').innerHTML = on
+    ? '<span class="live-dot"></span><span class="text-green-600 text-xs font-medium ml-1.5">Live</span>'
+    : '<span class="w-2 h-2 rounded-full bg-gray-300 inline-block"></span><span class="text-gray-400 text-xs ml-1.5">Disconnected</span>';
+}
+
+// ── Events ─────────────────────────────────────────────────────────────────
+function handleEvent(ev) {
+  switch(ev.type) {
+    case 'ping': break;
+    case 'step_start':
+      setStepActive(ev.step, ev.detail);
+      addLog(`▶ Step ${ev.step}: ${ev.name} — ${ev.detail}`, 'info');
+      if (ev.step === 3) document.getElementById('stt-progress-box').classList.remove('hidden');
+      if (ev.step === 6) initAuditGrid();
+      break;
+    case 'step_done':
+      setStepDone(ev.step, ev.result);
+      addLog(`✓ Step ${ev.step}: ${ev.result}`, 'success');
+      if (ev.step === 3) document.getElementById('stt-progress-box').classList.add('hidden');
+      break;
+    case 'chunk_ok':
+      chunkDone++;
+      if (!chunkTotal && ev.total) { chunkTotal = ev.total; document.getElementById('stat-chunks-total').textContent = ev.total; }
+      updateChunkStats(ev.done, ev.total, ev.pct);
+      addChunkCard(ev, false);
+      if (ev.lang && ev.lang !== '–') document.getElementById('stat-lang').textContent = ev.lang;
+      break;
+    case 'chunk_fail':
+      chunkDone++; chunkFail++;
+      document.getElementById('stat-chunks-fail').textContent = chunkFail;
+      if (!chunkTotal && ev.total) { chunkTotal = ev.total; document.getElementById('stat-chunks-total').textContent = ev.total; }
+      updateChunkStats(ev.done, ev.total, Math.round(ev.done/Math.max(ev.total,1)*100));
+      addChunkCard(ev, true);
+      break;
+    case 'audit_start': addLog(`⚙ ${ev.category}`, 'info'); break;
+    case 'audit_done':
+      if (ev.category_id) explainableData[ev.category_id] = ev;
+      markAuditCatDone(ev.category, ev.score, ev.category_id||'');
+      addLog(`✓ ${ev.category}: ${ev.score}/10`, 'success');
+      break;
+    case 'score_ready': showScorecard(ev); break;
+    case 'done':
+      stopTimer(); addLog('✅ Audit complete!', 'success');
+      setConnected(false); loadRecentSessions();
+      showDownloadButtons(currentSessionId);
+      if (currentSessionId) fetchExplainableData(currentSessionId);
+      break;
+    case 'error':
+      addLog(`❌ ${ev.message}`, 'error');
+      document.getElementById('score-status').textContent = 'Pipeline failed';
+      stopTimer();
+      break;
+    case 'log': addLog(ev.message, ev.level||'info'); break;
+  }
+}
+
+// ── Pipeline steps ─────────────────────────────────────────────────────────
+function setStepActive(n, detail) {
+  const el = document.getElementById(`step-${n}`); if (!el) return;
+  el.className = 'step-card active';
+  el.querySelector('.step-detail').textContent = detail || 'Running…';
+  el.querySelector('.step-badge').innerHTML = '<span class="cat-spin" style="display:inline-block;width:10px;height:10px;border:1.5px solid #fecdd3;border-top-color:var(--k-red);border-radius:50%;animation:spin .7s linear infinite"></span>';
+}
+function setStepDone(n, result) {
+  const el = document.getElementById(`step-${n}`); if (!el) return;
+  el.className = 'step-card done';
+  el.querySelector('.step-detail').textContent = result || 'Done';
+  el.querySelector('.step-badge').textContent = '✓';
+}
+
+// ── Chunk stats ────────────────────────────────────────────────────────────
+function updateChunkStats(done, total, pct) {
+  document.getElementById('stat-chunks-done').textContent = done;
+  document.getElementById('stat-utterances').textContent = done - chunkFail;
+  const fill = document.getElementById('stt-progress-fill');
+  if (fill) fill.style.width = pct + '%';
+  document.getElementById('stt-progress-label').textContent = `${done} / ${total}`;
+}
+
+function addChunkCard(ev, failed) {
+  const feed = document.getElementById('chunk-feed');
+  const div = document.createElement('div');
+  div.className = `chunk-item${failed?' failed':''}`;
+  if (failed) {
+    div.innerHTML = `<div class="flex items-center gap-2"><span class="mono text-[10px] text-gray-400">chunk_${String(ev.chunk_id).padStart(4,'0')}</span><span class="text-[10px] text-red-500">✗ ${ev.reason}</span></div>`;
+  } else {
+    const lc = ev.lang.startsWith('hi')?'#ea580c':ev.lang.startsWith('kn')?'#7c3aed':'#2563eb';
+    div.innerHTML = `
+      <div class="flex items-center gap-1.5 mb-1">
+        <span class="mono text-[10px] text-gray-400">chunk_${String(ev.chunk_id).padStart(4,'0')}</span>
+        <span class="text-[10px] px-1.5 py-0.5 rounded mono font-medium" style="background:${lc}14;color:${lc}">${ev.lang}</span>
+        <span class="text-[9px] text-gray-300">${ev.done}/${ev.total}</span>
+      </div>
+      ${ev.native?`<div class="text-[10.5px] text-gray-500 mb-0.5">${escapeHtml(ev.native)}</div>`:''}
+      ${ev.english&&ev.english!==ev.native?`<div class="text-[10.5px] text-gray-700">→ ${escapeHtml(ev.english)}</div>`:''}`;
+  }
+  feed.prepend(div);
+  if (feed.children.length > 80) feed.removeChild(feed.lastChild);
+}
+
+// ── Audit category grid ────────────────────────────────────────────────────
+function initAuditGrid() {
+  const box  = document.getElementById('audit-progress-box');
+  const grid = document.getElementById('audit-cats');
+  box.classList.remove('hidden'); grid.innerHTML = '';
+  CATEGORIES.forEach(cat => {
+    const div = document.createElement('div');
+    div.className = 'audit-cat'; div.id = `audit-cat-${cat.id}`;
+    div.innerHTML = `<span class="cat-name">${cat.label}</span><span class="cat-spin"></span>`;
+    grid.appendChild(div);
+  });
+}
+
+function markAuditCatDone(label, score, categoryId) {
+  const cat = CATEGORIES.find(c => c.label === label || c.id === categoryId);
+  if (!cat) return;
+  const el = document.getElementById(`audit-cat-${cat.id}`); if (!el) return;
+  const color = scoreColor(score);
+  el.className = 'audit-cat done';
+  el.innerHTML = `<span class="cat-name">${label}</span><span class="cat-score" style="color:${color}">${score.toFixed(1)}</span>`;
+}
+
+// ── Why panel ──────────────────────────────────────────────────────────────
+function toggleWhyPanel(catId) {
+  const panel = document.getElementById(`why-${catId}`);
+  const chev  = document.getElementById(`chev-${catId}`);
+  if (!panel) return;
+  if (!panel.classList.contains('hidden')) { panel.classList.add('hidden'); if(chev) chev.textContent='▸ Why?'; return; }
+  const d = explainableData[catId];
+  if (!d) { panel.innerHTML=`<p class="text-gray-400 text-[10px] italic">Explanation loading…</p>`; panel.classList.remove('hidden'); if(chev) chev.textContent='▾ Why?'; return; }
+  const confColor = d.score_confidence>=.7?'#16a34a':d.score_confidence>=.4?'#d97706':'#dc2626';
+  const basis = d.evaluation_basis==='gpt'?'GPT-4o':d.evaluation_basis==='na'?'N/A':'Rule-based';
+  const zero  = (d.reason_for_zero&&d.score<2)?`<div class="why-block why-zero"><span class="why-label">Why Zero?</span><p>${escapeHtml(d.reason_for_zero)}</p></div>`:'';
+  const evid  = (d.evidence_found||[]).length?`<div class="why-block"><span class="why-label">Evidence Found</span><ul>${(d.evidence_found||[]).map(e=>`<li>${escapeHtml(e)}</li>`).join('')}</ul></div>`:'';
+  const miss  = (d.missing_behaviors||[]).length?`<div class="why-block"><span class="why-label">What Was Missing</span><ul style="color:#ea580c">${(d.missing_behaviors||[]).map(m=>`<li>${escapeHtml(m)}</li>`).join('')}</ul></div>`:'';
+  const tr    = (d.transcript_evidence||[]).length?`<div class="why-block"><span class="why-label">Transcript Evidence</span>`+(d.transcript_evidence||[]).map(te=>`<div class="transcript-cite"><span class="cite-ts">[${escapeHtml(te.timestamp)}] ${escapeHtml(te.speaker)}</span><p class="cite-quote">"${escapeHtml(te.quote)}"</p><p class="cite-rel">${escapeHtml(te.relevance)}</p></div>`).join('')+`</div>`:'';
+  const coach = d.coaching_feedback?`<div class="why-block why-coach"><span class="why-label">Coaching</span><p>${escapeHtml(d.coaching_feedback)}</p></div>`:'';
+  panel.innerHTML=`<div><p class="why-score-line font-medium">${escapeHtml(d.why_score||'')}</p><div class="why-meta"><span style="color:${confColor}">Confidence: ${Math.round((d.score_confidence||0)*100)}%</span><span class="text-gray-300">·</span><span class="text-gray-400">${basis}</span></div></div>${zero}${evid}${miss}${tr}${coach}`;
+  panel.classList.remove('hidden'); if(chev) chev.textContent='▾ Why?';
+}
+
+// ── Scorecard ──────────────────────────────────────────────────────────────
+function showScorecard(ev) {
+  if (document.getElementById('audit-progress-box').classList.contains('hidden')) initAuditGrid();
+  CATEGORIES.forEach(cat => markAuditCatDone(cat.label, ev.scores[cat.id]??0, ''));
+
+  const pct  = ev.overall;
+  const ring = document.getElementById('score-ring');
+  ring.style.strokeDasharray = `${pct} 100`;
+  ring.setAttribute('stroke', pct>=75?'#16a34a':pct>=60?'#d97706':'#dc2626');
+  document.getElementById('score-num').textContent = Math.round(pct);
+  const grEl = document.getElementById('score-grade');
+  grEl.textContent = ev.grade;
+  grEl.className = `text-sm font-bold grade-${ev.grade.replace('+','\\+')}`;
+  document.getElementById('score-status').textContent = `${pct}/100 — ${ev.grade}`;
+
+  if (ev.explainable?.length) ev.explainable.forEach(r => { explainableData[r.category_id]=r; });
+
+  // Category bars
+  const catsEl = document.getElementById('cat-scores');
+  catsEl.classList.remove('hidden');
+  const barsEl = document.getElementById('cat-bars');
+  barsEl.innerHTML = '';
+  CATEGORIES.forEach(cat => {
+    const score = ev.scores[cat.id] ?? 0;
+    const color = scoreColor(score);
+    const div   = document.createElement('div');
+    div.className = 'cat-bar-row';
+    div.innerHTML = `
+      <div class="flex items-center justify-between mb-1">
+        <button class="text-[10px] text-gray-500 hover:text-gray-900 flex items-center gap-1 transition-colors" onclick="toggleWhyPanel('${cat.id}')">
+          ${escapeHtml(cat.label)}
+          <span class="why-chevron text-[8px] text-gray-300" id="chev-${cat.id}">▸ Why?</span>
+        </button>
+        <span class="text-[11px] mono font-bold" style="color:${color}">${score.toFixed(1)}</span>
+      </div>
+      <div style="height:3px;background:#f3f4f6;border-radius:99px;overflow:hidden;margin-bottom:3px">
+        <div class="score-bar" style="width:0%;background:${color}" data-w="${score*10}"></div>
+      </div>
+      <div id="why-${cat.id}" class="why-panel hidden"></div>`;
+    barsEl.appendChild(div);
+  });
+  setTimeout(() => document.querySelectorAll('.score-bar').forEach(el => el.style.width = el.dataset.w+'%'), 80);
+
+  // Composite breakdown
+  if (ev.composite?.deck_id) {
+    const cbox = document.getElementById('composite-box');
+    cbox.classList.remove('hidden');
+    const w = ev.composite.weights || {};
+    document.getElementById('comp-behavioral').textContent = `${(ev.composite.behavioral_score||0).toFixed(1)} × ${Math.round((w.behavioral_layer||0.55)*100)}% = ${(ev.composite.behavioral_component||0).toFixed(1)}`;
+    document.getElementById('comp-deck').textContent       = `${(ev.composite.deck_coverage_score||0).toFixed(1)} × ${Math.round((w.deck_coverage_layer||0.45)*100)}% = ${(ev.composite.deck_component||0).toFixed(1)}`;
+    document.getElementById('comp-final').textContent      = `${(ev.composite.overall||0).toFixed(1)}/100`;
+  }
+
+  // Coaching
+  if (ev.highlights || ev.strengths || ev.improvements) {
+    document.getElementById('coaching-box').classList.remove('hidden');
+    const content = document.getElementById('coaching-content');
+    content.innerHTML = '';
+    const col = (accent, title, items, prefix) => {
+      if (!items?.length) return '';
+      return `<div><p class="font-semibold text-[10px] uppercase tracking-wider mb-2" style="color:${accent}">${title}</p>${items.map(x=>`<p class="mb-1 text-[10.5px] text-gray-600">${prefix} ${x}</p>`).join('')}</div>`;
+    };
+    content.innerHTML =
+      col('#ca8a04','Highlights', ev.highlights,'★') +
+      col('#16a34a','Strengths',  ev.strengths, '+') +
+      col('#dc2626','To Improve', ev.improvements,'→');
+  }
+
+  enterResultsMode();
+  if (currentSessionId) setTimeout(() => fetchParticipantIntelligence(currentSessionId), 2000);
+}
+
+// ── Participant Intelligence ───────────────────────────────────────────────
+function renderParticipantIntelligence(pi) {
+  if (!pi) return;
+  const box = document.getElementById('participant-box');
+  box.classList.remove('hidden');
+
+  // Quality badge
+  const qMap = {full:'full',partial:'partial',student_only:'student only',counsellor_only:'counsellor only',unknown:'–'};
+  const qColors = {full:'#16a34a',partial:'#d97706',student_only:'#9333ea',counsellor_only:'#6b7280',unknown:'#9ca3af'};
+  const qBg = {full:'#f0fdf4',partial:'#fffbeb',student_only:'#faf5ff',counsellor_only:'#f9fafb',unknown:'#f9fafb'};
+  const qBorder = {full:'#bbf7d0',partial:'#fde68a',student_only:'#e9d5ff',counsellor_only:'#e5e7eb',unknown:'#e5e7eb'};
+  const att = pi.attendance || {};
+  const q = att.meeting_attendance_quality || 'unknown';
+  const badge = document.getElementById('pi-quality-badge');
+  badge.textContent = qMap[q] || q;
+  badge.style.color      = qColors[q] || '#9ca3af';
+  badge.style.background = qBg[q]     || '#f9fafb';
+  badge.style.border     = `1px solid ${qBorder[q] || '#e5e7eb'}`;
+
+  // Attendance cells
+  const setAtt = (id, present, pct) => {
+    const dot = document.getElementById(id+'-dot');
+    const val = document.getElementById(id+'-val');
+    dot.style.background = present ? '#16a34a' : '#d1d5db';
+    val.textContent = present ? (pct ? pct.toFixed(0)+'%' : '✓') : '✗';
+    val.style.color = present ? '#111827' : '#d1d5db';
+  };
+  setAtt('pi-att-student', att.student_present, att.student_attendance_pct);
+  setAtt('pi-att-parent',  att.parent_present,  att.parent_attendance_pct);
+
+  // Talk-time bars
+  const roleColors = {Counsellor:'#E8192C',Student:'#2563eb',Parent:'#7c3aed',Unknown:'#9ca3af'};
+  const barsEl = document.getElementById('pi-bars');
+  barsEl.innerHTML = '';
+  (pi.participants || []).forEach(p => {
+    const color = roleColors[p.role] || '#9ca3af';
+    const pct   = p.word_share_pct || 0;
+    const div   = document.createElement('div');
+    div.className = 'flex items-center gap-2';
+    div.style.cssText = 'font-size:11px';
+    div.innerHTML = `
+      <span style="width:68px;flex-shrink:0;color:#6b7280">${escapeHtml(p.speaker_id)}</span>
+      <div style="flex:1;height:5px;background:#f3f4f6;border-radius:3px;overflow:hidden">
+        <div style="width:${pct}%;height:100%;background:${color};border-radius:3px;transition:width .6s ease"></div>
+      </div>
+      <span style="width:34px;text-align:right;font-family:'JetBrains Mono',monospace;color:#374151;font-weight:600">${pct.toFixed(0)}%</span>
+      <span style="width:60px;color:#9ca3af">${p.questions_asked}q · ${p.turn_count}t</span>`;
+    barsEl.appendChild(div);
+  });
+  // Animate bars after paint
+  setTimeout(() => {}, 60);
+
+  // Engagement scores
+  const scoreColor = v => v >= 7 ? '#16a34a' : v >= 5 ? '#d97706' : '#dc2626';
+  const sesEl = document.getElementById('pi-ses');
+  const pesEl = document.getElementById('pi-pes');
+  const scsEl = document.getElementById('pi-scs');
+  sesEl.textContent = (pi.student_engagement_score||0).toFixed(1);
+  pesEl.textContent = (pi.parent_engagement_score||0).toFixed(1);
+  scsEl.textContent = (pi.stakeholder_coverage_score||0).toFixed(1);
+  sesEl.style.color = scoreColor(pi.student_engagement_score||0);
+  pesEl.style.color = scoreColor(pi.parent_engagement_score||0);
+  scsEl.style.color = scoreColor(pi.stakeholder_coverage_score||0);
+
+  // Flags
+  const flagsEl = document.getElementById('pi-flags');
+  const flagLabels = {
+    parent_absent:'Parent absent',parent_silent:'Parent silent',
+    student_passive:'Student passive',counsellor_dominated:'Counsellor dominated',
+    unresolved_parent_objections:'Unresolved objections',
+  };
+  const flagColors = {
+    parent_absent:'#dc2626',parent_silent:'#d97706',
+    student_passive:'#d97706',counsellor_dominated:'#9333ea',
+    unresolved_parent_objections:'#dc2626',
+  };
+  if (pi.flags?.length) {
+    flagsEl.classList.remove('hidden');
+    flagsEl.innerHTML = pi.flags.map(f =>
+      `<span style="font-size:9.5px;font-weight:600;padding:2px 7px;border-radius:3px;
+        background:${(flagColors[f]||'#9ca3af')}22;color:${flagColors[f]||'#9ca3af'};
+        border:1px solid ${flagColors[f]||'#9ca3af'}44">${escapeHtml(flagLabels[f]||f)}</span>`
+    ).join('');
+  }
+
+  // Narrative
+  if (pi.audit_impact_narrative) {
+    const narEl = document.getElementById('pi-narrative');
+    narEl.textContent = pi.audit_impact_narrative;
+    narEl.style.display = 'block';
+  }
+}
+
+// ── Downloads ──────────────────────────────────────────────────────────────
+function showDownloadButtons(sid) {
+  if (!sid) return;
+  const box = document.getElementById('download-box'); if (!box) return;
+  box.classList.remove('hidden');
+  document.getElementById('btn-dl-pdf').onclick   = () => { window.location.href=`/api/v1/audit/${sid}/download/pdf?actor=${encodeURIComponent(getActorName())}`; };
+  document.getElementById('btn-dl-excel').onclick = () => { window.location.href=`/api/v1/audit/${sid}/download/excel?actor=${encodeURIComponent(getActorName())}`; };
+  document.getElementById('btn-dl-txt').onclick   = () => { window.location.href=`/api/v1/audit/${sid}/download/transcript?actor=${encodeURIComponent(getActorName())}`; };
+  document.getElementById('btn-push-tracker').onclick = () => openTrackerModal(sid);
+}
+
+// ── Identity (real login — see api/v1/auth/me) ───────────────────────────────
+function getActorName() {
+  return (CURRENT_USER && CURRENT_USER.name) || '';
+}
+
+// ── Deck management ───────────────────────────────────────────────────────────
+async function checkDeckPill() {
+  const dot = document.getElementById('deck-pill-dot');
+  const label = document.getElementById('deck-pill-label');
+  if (!dot || !label) return;
+  try {
+    const res = await fetch('/api/v1/decks/active/info');
+    const data = await res.json();
+    if (data.active && data.deck) {
+      dot.style.background = '#16a34a';
+      label.textContent = `Deck: ${data.deck.deck_name}`;
+    } else {
+      dot.style.background = '#d1d5db';
+      label.textContent = 'Deck: none active';
+    }
+  } catch (e) {
+    dot.style.background = '#d1d5db';
+    label.textContent = 'Deck: unknown';
+  }
+}
+
+function openDeckModal() {
+  document.getElementById('deck-modal').classList.remove('hidden');
+  document.getElementById('deck-upload-status').textContent = '';
+  loadDeckList();
+}
+function closeDeckModal() {
+  document.getElementById('deck-modal').classList.add('hidden');
+}
+
+const DECK_STATUS_LABEL = { draft: 'Draft', review: 'In review', active: 'Active', deprecated: 'Deprecated', archived: 'Archived' };
+const DECK_PROMOTE_LABEL = { draft: 'Submit for review', review: 'Activate' };
+
+async function loadDeckList() {
+  const box = document.getElementById('deck-list');
+  box.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>';
+  try {
+    const res = await fetch('/api/v1/decks');
+    const { decks } = await res.json();
+    if (!decks || !decks.length) {
+      box.innerHTML = '<p class="text-xs text-gray-400">No decks uploaded yet.</p>';
+      return;
+    }
+    box.innerHTML = decks.map(renderDeckCard).join('');
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500">Could not load decks: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function renderDeckCard(d) {
+  const statusLabel = DECK_STATUS_LABEL[d.status] || d.status;
+  const promoteLabel = DECK_PROMOTE_LABEL[d.status];
+  const promoteBtn = promoteLabel
+    ? `<button class="btn-secondary" style="width:auto;padding:5px 10px" onclick="promoteDeck('${d.deck_id}')">${promoteLabel}</button>`
+    : '';
+  return `
+    <div class="deck-card" id="deck-card-${d.deck_id}">
+      <div class="deck-card-head">
+        <div>
+          <div class="deck-name">${escapeHtml(d.deck_name)} <span class="text-gray-400 font-normal">v${d.version_major}.${d.schema_patch}</span></div>
+          <div class="deck-meta">${d.slide_count || 0} slides · ${d.total_criteria || 0} topics · uploaded ${escapeHtml((d.created_at||'').slice(0,10))}</div>
+        </div>
+        <div class="deck-actions">
+          <span class="deck-badge ${d.status}">${escapeHtml(statusLabel)}</span>
+          ${promoteBtn}
+        </div>
+      </div>
+      <button class="deck-crit-toggle" onclick="toggleDeckCriteria('${d.deck_id}', this)">Show topics ▾</button>
+      <div class="deck-crit-list hidden" id="deck-crit-${d.deck_id}"></div>
+    </div>`;
+}
+
+async function promoteDeck(deckId) {
+  try {
+    const res = await fetch(`/api/v1/decks/${deckId}/promote`, { method: 'POST' });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    addLog(`Deck ${deckId.slice(0,8)}: ${data.old_status} -> ${data.new_status}`, 'success');
+    await loadDeckList();
+    checkDeckPill();
+  } catch (e) { addLog(`Could not update deck: ${e}`, 'error'); }
+}
+
+async function toggleDeckCriteria(deckId, btn) {
+  const box = document.getElementById(`deck-crit-${deckId}`);
+  if (!box.classList.contains('hidden')) {
+    box.classList.add('hidden');
+    btn.textContent = 'Show topics ▾';
+    return;
+  }
+  btn.textContent = 'Hide topics ▴';
+  box.classList.remove('hidden');
+  if (box.dataset.loaded) return;
+  box.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>';
+  try {
+    const res = await fetch(`/api/v1/decks/${deckId}/criteria`);
+    const data = await res.json();
+    const rows = [];
+    const slideNums = Object.keys(data.by_slide || {}).map(Number).sort((a,b) => a-b);
+    for (const sn of slideNums) {
+      for (const c of data.by_slide[sn]) {
+        rows.push(`<div class="deck-crit-row">
+          <span class="deck-crit-imp ${escapeHtml(c.importance)}">${escapeHtml((c.importance||'').toUpperCase())}</span>
+          <span>${escapeHtml(c.label)}</span>
+        </div>`);
+      }
+    }
+    box.innerHTML = rows.join('') || '<p class="text-xs text-gray-400">No topics extracted.</p>';
+    box.dataset.loaded = '1';
+  } catch (e) {
+    box.innerHTML = `<p class="text-xs text-red-500">Could not load topics: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+async function uploadDeck() {
+  const fileInput = document.getElementById('deck-file');
+  const f = fileInput.files[0];
+  const statusEl = document.getElementById('deck-upload-status');
+  if (!f) { addLog('Choose a .pptx file first', 'warn'); return; }
+  const name = document.getElementById('deck-name-input').value.trim();
+  const fd = new FormData();
+  fd.append('file', f);
+  const btn = document.getElementById('btn-deck-upload');
+  btn.disabled = true;
+  statusEl.textContent = 'Uploading…';
+  statusEl.style.color = '#6b7280';
+  try {
+    const url = '/api/v1/decks/upload' + (name ? `?deck_name=${encodeURIComponent(name)}` : '');
+    const res = await fetch(url, { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const { job_id } = await res.json();
+    statusEl.textContent = 'Generating evaluation framework — this can take a minute…';
+    await pollDeckJob(job_id, statusEl);
+  } catch (e) {
+    statusEl.textContent = `Upload failed: ${e}`;
+    statusEl.style.color = '#dc2626';
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function pollDeckJob(jobId, statusEl) {
+  for (let i = 0; i < 60; i++) {
+    await new Promise(r => setTimeout(r, 3000));
+    try {
+      const res = await fetch(`/api/v1/decks/jobs/${jobId}`);
+      const job = await res.json();
+      if (job.status === 'done') {
+        statusEl.textContent = `Done — "${job.deck_name}": ${job.slide_count} slides, ${job.total_criteria} topics. Review below, then activate it.`;
+        statusEl.style.color = '#16a34a';
+        document.getElementById('deck-file').value = '';
+        document.getElementById('deck-name-input').value = '';
+        addLog(`Deck generated: ${job.deck_name} (${job.total_criteria} topics)`, 'success');
+        await loadDeckList();
+        return;
+      }
+      if (job.status === 'failed') {
+        statusEl.textContent = `Generation failed: ${job.error || 'unknown error'}`;
+        statusEl.style.color = '#dc2626';
+        return;
+      }
+    } catch (e) { /* keep polling */ }
+  }
+  statusEl.textContent = 'Still processing — check back in a moment (large decks can take a while).';
+}
+
+// ── Google Sheets connection ─────────────────────────────────────────────────
+let googleStatus = null;
+
+async function checkGoogleStatus() {
+  try {
+    const res = await fetch('/api/v1/google/status');
+    googleStatus = await res.json();
+  } catch (e) { googleStatus = null; }
+  renderGooglePill();
+}
+
+function renderGooglePill() {
+  const dot = document.getElementById('gsheet-dot');
+  const label = document.getElementById('gsheet-label');
+  if (!dot || !label) return;
+  if (googleStatus && googleStatus.connected && googleStatus.sheet_id) {
+    dot.style.background = '#16a34a';
+    label.textContent = `Sheets: ${googleStatus.sheet_name || googleStatus.tab_name || 'connected'}`;
+  } else if (googleStatus && googleStatus.connected) {
+    dot.style.background = '#d97706';
+    label.textContent = 'Sheets: pick a sheet';
+  } else {
+    dot.style.background = '#d1d5db';
+    label.textContent = 'Sheets: not connected';
+  }
+}
+
+function openGoogleModal() {
+  document.getElementById('google-modal').classList.remove('hidden');
+  renderGoogleModalBody();
+}
+function closeGoogleModal() {
+  document.getElementById('google-modal').classList.add('hidden');
+}
+
+function renderGoogleModalBody() {
+  const body = document.getElementById('google-modal-body');
+  if (!googleStatus) { body.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>'; return; }
+
+  if (!googleStatus.has_credentials_file) {
+    body.innerHTML = `
+      <p class="text-xs text-gray-500 mb-3">Step 1 — Upload the OAuth <code>credentials.json</code> from Google Cloud Console
+        (APIs &amp; Services → Credentials → OAuth client, type "Web application", with
+        <span class="mono">${escapeHtml(location.origin)}/api/v1/google/callback</span> as an authorized redirect URI).</p>
+      <input id="gcred-file" type="file" accept="application/json" class="k-input mb-3" />
+      <button class="btn-primary" onclick="uploadGoogleCredentials()">Upload credentials.json</button>`;
+    return;
+  }
+  if (!googleStatus.connected) {
+    body.innerHTML = `
+      <p class="text-xs text-green-600 mb-1">✅ Credentials uploaded.</p>
+      <p class="text-xs text-gray-500 mb-3">Step 2 — sign in with the Google account that owns the tracker spreadsheet.</p>
+      <button class="btn-primary" onclick="startGoogleAuth()">Connect Google account</button>`;
+    return;
+  }
+  body.innerHTML = `
+    <p class="text-xs text-green-600 mb-3">✅ Connected as ${escapeHtml(googleStatus.email || 'a Google account')}.</p>
+    <label class="k-field-label">Spreadsheet</label>
+    <select id="gsheet-select" class="k-input mb-3"><option>Loading…</option></select>
+    <label class="k-field-label">Tab</label>
+    <select id="gtab-select" class="k-input mb-4"><option value="${escapeHtml(googleStatus.tab_name || '2026 Demo Auditng')}">${escapeHtml(googleStatus.tab_name || '2026 Demo Auditng')}</option></select>
+    <div class="flex gap-2">
+      <button class="btn-primary" style="width:auto;flex:1" onclick="saveGoogleConfig()">Save</button>
+      <button class="btn-secondary" style="width:auto;flex:1" onclick="disconnectGoogle()">Disconnect</button>
+    </div>`;
+  loadGoogleSheetsList();
+}
+
+async function uploadGoogleCredentials() {
+  const input = document.getElementById('gcred-file');
+  const f = input && input.files[0];
+  if (!f) { addLog('Choose a credentials.json file first', 'warn'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const res = await fetch('/api/v1/google/upload-credentials', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    addLog('credentials.json uploaded', 'success');
+    await checkGoogleStatus();
+    renderGoogleModalBody();
+  } catch (e) { addLog(`Upload failed: ${e}`, 'error'); }
+}
+
+async function startGoogleAuth() {
+  try {
+    const res = await fetch('/api/v1/google/auth-url');
+    if (!res.ok) throw new Error(await res.text());
+    const { url } = await res.json();
+    window.open(url, 'google-auth', 'width=520,height=640');
+    window.addEventListener('message', function handler(ev) {
+      if (!ev.data || ev.data.type !== 'google_auth') return;
+      window.removeEventListener('message', handler);
+      if (ev.data.ok) addLog(`Connected to Google as ${ev.data.email}`, 'success');
+      else addLog(`Google auth failed: ${ev.data.error}`, 'error');
+      checkGoogleStatus().then(renderGoogleModalBody);
+    });
+  } catch (e) { addLog(`Auth failed: ${e}`, 'error'); }
+}
+
+async function loadGoogleSheetsList() {
+  const sel = document.getElementById('gsheet-select');
+  try {
+    const res = await fetch('/api/v1/google/sheets');
+    const { sheets } = await res.json();
+    if (!sheets || !sheets.length) { sel.innerHTML = '<option value="">No spreadsheets found</option>'; return; }
+    sel.innerHTML = sheets.map(s =>
+      `<option value="${escapeHtml(s.id)}" ${s.id === googleStatus.sheet_id ? 'selected' : ''}>${escapeHtml(s.name)}</option>`
+    ).join('');
+    sel.onchange = () => loadGoogleTabs(sel.value);
+    loadGoogleTabs(sel.value);
+  } catch (e) { sel.innerHTML = '<option value="">Failed to load</option>'; }
+}
+
+async function loadGoogleTabs(sheetId) {
+  const tsel = document.getElementById('gtab-select');
+  if (!sheetId) return;
+  try {
+    const res = await fetch(`/api/v1/google/sheets/${sheetId}/tabs`);
+    const { tabs } = await res.json();
+    if (tabs && tabs.length) {
+      tsel.innerHTML = tabs.map(t =>
+        `<option ${t === googleStatus.tab_name ? 'selected' : ''}>${escapeHtml(t)}</option>`
+      ).join('');
+    }
+  } catch (e) { /* keep default option */ }
+}
+
+async function saveGoogleConfig() {
+  const sheetSel = document.getElementById('gsheet-select');
+  const tabSel = document.getElementById('gtab-select');
+  const sheetId = sheetSel.value;
+  const tabName = tabSel.value;
+  const sheetName = sheetSel.selectedOptions[0] ? sheetSel.selectedOptions[0].textContent : '';
+  if (!sheetId) { addLog('Pick a spreadsheet first', 'warn'); return; }
+  try {
+    const res = await fetch('/api/v1/google/configure', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sheet_id: sheetId, tab_name: tabName, sheet_name: sheetName })
+    });
+    if (!res.ok) throw new Error(await res.text());
+    addLog(`Google Sheet configured: ${sheetName} / ${tabName}`, 'success');
+    await checkGoogleStatus();
+    closeGoogleModal();
+  } catch (e) { addLog(`Save failed: ${e}`, 'error'); }
+}
+
+async function disconnectGoogle() {
+  try {
+    await fetch('/api/v1/google/disconnect', { method: 'POST' });
+    addLog('Disconnected Google Sheets', 'info');
+    await checkGoogleStatus();
+    renderGoogleModalBody();
+  } catch (e) { addLog(`Disconnect failed: ${e}`, 'error'); }
+}
+
+// ── Push to Audit Tracker ─────────────────────────────────────────────────────
+let _trackerColumns = [];
+let _trackerSid = null;
+
+async function openTrackerModal(sid) {
+  if (!sid) { addLog('No completed session to push', 'warn'); return; }
+  _trackerSid = sid;
+  document.getElementById('tracker-modal').classList.remove('hidden');
+  document.getElementById('tracker-fields').innerHTML = '<p class="text-xs text-gray-400 col-span-2">Loading…</p>';
+  document.getElementById('tracker-fields-more').innerHTML = '';
+  document.getElementById('tracker-fields-more').classList.add('hidden');
+  document.getElementById('tracker-more-toggle').classList.add('hidden');
+  updateTrackerGoogleNote();
+  refreshTLMappingStatus();
+  try {
+    const res = await fetch(`/api/v1/audit/${sid}/auto-fill`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    _trackerColumns = data.columns || [];
+    renderTrackerFields(_trackerColumns, data.auto_filled || {});
+  } catch (e) {
+    document.getElementById('tracker-fields').innerHTML =
+      `<p class="text-xs text-red-500 col-span-2">Could not load audit data: ${escapeHtml(String(e))}</p>`;
+  }
+}
+
+function closeTrackerModal() {
+  document.getElementById('tracker-modal').classList.add('hidden');
+}
+
+// ── Associate → TL mapping ────────────────────────────────────────────────────
+function toggleTLMappingPanel() {
+  document.getElementById('tl-map-panel').classList.toggle('hidden');
+}
+
+async function refreshTLMappingStatus() {
+  const el = document.getElementById('tl-map-status');
+  if (!el) return;
+  try {
+    const res = await fetch('/api/v1/tl-mapping');
+    const data = await res.json();
+    el.textContent = data.entries ? `${data.entries} associates mapped` : 'not set up yet';
+  } catch (e) { el.textContent = ''; }
+}
+
+async function uploadTLMapping() {
+  const input = document.getElementById('tl-map-file');
+  const f = input && input.files[0];
+  if (!f) { addLog('Choose a mapping file first', 'warn'); return; }
+  const fd = new FormData();
+  fd.append('file', f);
+  try {
+    const res = await fetch('/api/v1/tl-mapping/upload', { method: 'POST', body: fd });
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    addLog(`TL mapping saved — ${data.entries} associates`, 'success');
+    await refreshTLMappingStatus();
+    document.getElementById('tl-map-panel').classList.add('hidden');
+    // Re-fetch auto-fill so TL Name picks up the new mapping immediately.
+    if (_trackerSid) openTrackerModal(_trackerSid);
+  } catch (e) { addLog(`Mapping upload failed: ${e}`, 'error'); }
+}
+
+function updateTrackerGoogleNote() {
+  const note = document.getElementById('tracker-gsheet-note');
+  if (!note) return;
+  if (googleStatus && googleStatus.connected && googleStatus.sheet_id) {
+    note.innerHTML = `✅ Will save to the local Excel tracker <b>and</b> push to Google Sheet
+      <b>${escapeHtml(googleStatus.sheet_name || googleStatus.tab_name)}</b>.`;
+    note.style.color = '#16a34a';
+  } else {
+    note.innerHTML = `⚠️ Google Sheets isn't connected — this row will only save to the local Excel tracker.
+      <a href="#" onclick="openGoogleModal();return false;" class="underline">Connect Google Sheets</a>`;
+    note.style.color = '#d97706';
+  }
+}
+
+const _TRACKER_LONG_FIELDS = new Set(['\nDetailed review notes', 'Auditor comments on Call Pitch', 'Notes']);
+
+function _trackerFieldHtml(col, i, autoFilled) {
+  const label = escapeHtml(col.replace(/\n/g, ' ').trim());
+  const raw = autoFilled[col];
+  const val = (raw === null || raw === undefined) ? '' : String(raw);
+  if (_TRACKER_LONG_FIELDS.has(col)) {
+    return `<div class="col-span-2"><label class="k-field-label">${label}</label>
+      <textarea id="tf-${i}" class="k-input" rows="2">${escapeHtml(val)}</textarea></div>`;
+  }
+  return `<div><label class="k-field-label">${label}</label>
+    <input id="tf-${i}" class="k-input" type="text" value="${escapeHtml(val)}"/></div>`;
+}
+
+// AI/pipeline-derived fields that legitimately come back blank sometimes
+// (e.g. no parent on the call) but should still show up front, not get
+// buried behind "more fields".
+const _TRACKER_ALWAYS_FRONT = new Set([
+  'Audit date', 'Verdict', '\nDetailed review notes', 'Auditor comments on Call Pitch',
+  'Overall Score', 'Grade', 'Demo Grades(A/B/C)', 'Session ID',
+]);
+
+function renderTrackerFields(columns, autoFilled) {
+  const front = [], rest = [];
+  columns.forEach((col, i) => {
+    if (!col || !col.trim()) return;   // skip spacer column
+    const raw = autoFilled[col];
+    const hasValue = raw !== null && raw !== undefined && String(raw).trim() !== '';
+    (hasValue || _TRACKER_ALWAYS_FRONT.has(col) ? front : rest).push([col, i]);
+  });
+
+  document.getElementById('tracker-fields').innerHTML =
+    front.map(([col, i]) => _trackerFieldHtml(col, i, autoFilled)).join('') ||
+    '<p class="text-xs text-gray-400 col-span-2">No AI-derived fields available.</p>';
+
+  const moreBox = document.getElementById('tracker-fields-more');
+  const toggle  = document.getElementById('tracker-more-toggle');
+  moreBox.innerHTML = rest.map(([col, i]) => _trackerFieldHtml(col, i, autoFilled)).join('');
+  moreBox.classList.add('hidden');
+  if (rest.length) {
+    toggle.classList.remove('hidden');
+    toggle.textContent = `+ Show ${rest.length} more fields (CRM / manual — not yet auto-filled)`;
+  } else {
+    toggle.classList.add('hidden');
+  }
+
+  // "Lead Owner" is restricted to the admin-managed roster, not free text.
+  const ownerIdx = columns.indexOf('Lead Owner');
+  if (ownerIdx > -1) attachAssociatePicker(document.getElementById(`tf-${ownerIdx}`));
+}
+
+function toggleTrackerMore() {
+  const moreBox = document.getElementById('tracker-fields-more');
+  const toggle  = document.getElementById('tracker-more-toggle');
+  const willShow = moreBox.classList.contains('hidden');
+  moreBox.classList.toggle('hidden');
+  const n = moreBox.children.length;
+  toggle.textContent = willShow
+    ? `− Hide manual / CRM fields`
+    : `+ Show ${n} more fields (CRM / manual — not yet auto-filled)`;
+}
+
+function collectTrackerRow() {
+  const row = {};
+  _trackerColumns.forEach((col, i) => {
+    if (!col || !col.trim()) return;
+    const el = document.getElementById(`tf-${i}`);
+    if (el) row[col] = el.value;
+  });
+  return row;
+}
+
+async function submitTrackerRow() {
+  if (!_trackerSid) return;
+  const row = collectTrackerRow();
+  const btn = document.getElementById('btn-tracker-save');
+  btn.disabled = true;
+  const origLabel = btn.textContent;
+  btn.textContent = 'Saving…';
+  const actorQ = `?actor=${encodeURIComponent(getActorName())}`;
+  try {
+    const excelRes = await fetch(`/api/v1/audit/${_trackerSid}/save-to-excel${actorQ}`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row)
+    });
+    if (!excelRes.ok) throw new Error(await excelRes.text());
+    addLog('Saved row to master Excel tracker', 'success');
+
+    if (googleStatus && googleStatus.connected && googleStatus.sheet_id) {
+      const gRes = await fetch(`/api/v1/audit/${_trackerSid}/save-to-gsheet${actorQ}`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(row)
+      });
+      if (gRes.ok) addLog('Pushed row to Google Sheet', 'success');
+      else addLog(`Google Sheet push failed: ${await gRes.text()}`, 'error');
+    }
+    closeTrackerModal();
+  } catch (e) {
+    addLog(`Save failed: ${e}`, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = origLabel;
+  }
+}
+
+// ── Explainable data ───────────────────────────────────────────────────────
+async function fetchExplainableData(sid) {
+  try {
+    const res = await fetch(`/api/v1/audit/${sid}`); if (!res.ok) return;
+    const report = await res.json();
+    (report.llm_evaluations||[]).forEach(r => { if(r.category_id) explainableData[r.category_id]=r; });
+    document.querySelectorAll('.why-panel:not(.hidden)').forEach(panel => {
+      const catId = panel.id.replace('why-','');
+      if (explainableData[catId]) { toggleWhyPanel(catId); toggleWhyPanel(catId); }
+    });
+    const n = (report.llm_evaluations||[]).length;
+    if (n) addLog(`Loaded ${n} explainable scores`, 'info');
+  } catch(e) { console.warn('fetchExplainableData:', e); }
+}
+
+// ── Recent sessions ────────────────────────────────────────────────────────
+async function loadRecentSessions() {
+  try {
+    const res = await fetch('/api/v1/sessions?limit=5');
+    const data = await res.json(); if (!data.length) return;
+    document.getElementById('recent-box').classList.remove('hidden');
+    const list = document.getElementById('recent-list'); list.innerHTML = '';
+    data.forEach(s => {
+      const color = s.status==='completed'?'#16a34a':s.status==='failed'?'#dc2626':'#d97706';
+      const div = document.createElement('div'); div.className = 'recent-item';
+      div.onclick = () => viewBatchSession(s.session_id);
+      div.innerHTML = `<span style="width:6px;height:6px;border-radius:50%;background:${color};flex-shrink:0;display:inline-block"></span><span class="mono text-gray-500">${s.session_id.slice(0,8)}</span><span class="text-gray-400 text-[10px] ml-auto">${s.score!=null?s.score+'/100':s.status}</span>`;
+      list.appendChild(div);
+    });
+  } catch(_) {}
+}
+
+// ── Results mode ───────────────────────────────────────────────────────────
+function enterResultsMode() {
+  document.getElementById('left-sidebar').classList.add('results-sidebar');
+  document.getElementById('pipeline-box').classList.add('hidden');
+  document.getElementById('new-audit-wrap').classList.remove('hidden');
+  document.getElementById('new-audit-wrap').style.display = 'flex';
+  document.getElementById('results-back-bar').classList.add('visible');
+  const main = document.getElementById('center-main');
+  main.classList.remove('results-page-enter');
+  void main.offsetWidth;
+  main.classList.add('results-page-enter');
+}
+
+function resetAndHome() {
+  document.getElementById('left-sidebar').classList.remove('results-sidebar');
+  document.getElementById('pipeline-box').classList.remove('hidden');
+  document.getElementById('new-audit-wrap').classList.add('hidden');
+  document.getElementById('new-audit-wrap').style.display = '';
+  document.getElementById('results-back-bar').classList.remove('visible');
+  resetUI();
+}
+
+// ── Log ────────────────────────────────────────────────────────────────────
+function addLog(msg, level = 'info') {
+  const con  = document.getElementById('log-console');
+  const line = document.createElement('div');
+  line.className = `log-line ${level}`;
+  line.textContent = `[${new Date().toTimeString().slice(0,8)}] ${msg}`;
+  con.appendChild(line); con.scrollTop = con.scrollHeight;
+  if (con.children.length > 200) con.removeChild(con.firstChild);
+}
+
+// ── Timer ──────────────────────────────────────────────────────────────────
+function startTimer() {
+  startTime = Date.now(); clearInterval(timerInterval);
+  timerInterval = setInterval(() => {
+    const s = Math.floor((Date.now()-startTime)/1000);
+    document.getElementById('elapsed-timer').textContent = `${String(Math.floor(s/60)).padStart(2,'0')}:${String(s%60).padStart(2,'0')}`;
+  }, 1000);
+}
+function stopTimer() { clearInterval(timerInterval); }
+
+// ── Reset UI ───────────────────────────────────────────────────────────────
+function resetUI() {
+  chunkTotal = 0; chunkDone = 0; chunkFail = 0;
+  ['stat-chunks-total','stat-lang'].forEach(id => document.getElementById(id).textContent='–');
+  ['stat-chunks-done','stat-chunks-fail','stat-utterances'].forEach(id => document.getElementById(id).textContent='0');
+  document.getElementById('chunk-feed').innerHTML = '';
+  document.getElementById('log-console').innerHTML = '';
+  document.getElementById('audit-cats').innerHTML = '';
+  document.getElementById('audit-progress-box').classList.add('hidden');
+  document.getElementById('stt-progress-box').classList.add('hidden');
+  document.getElementById('cat-scores').classList.add('hidden');
+  document.getElementById('coaching-box').classList.add('hidden');
+  document.getElementById('composite-box').classList.add('hidden');
+  document.getElementById('download-box').classList.add('hidden');
+  document.getElementById('participant-box').classList.add('hidden');
+  document.getElementById('pi-flags').classList.add('hidden');
+  document.getElementById('pi-narrative').style.display = 'none';
+  document.getElementById('pi-bars').innerHTML = '';
+  ['pi-ses','pi-pes','pi-scs'].forEach(id => { document.getElementById(id).textContent='–'; document.getElementById(id).style.color=''; });
+  document.getElementById('score-num').textContent = '–';
+  document.getElementById('score-grade').textContent = '–';
+  document.getElementById('score-ring').style.strokeDasharray = '0 100';
+  document.getElementById('score-status').textContent = 'Upload a recording to begin';
+  [1,2,3,4,5,6,7].forEach(n => {
+    const el = document.getElementById(`step-${n}`);
+    el.className = 'step-card';
+    el.querySelector('.step-detail').textContent = 'Waiting…';
+    el.querySelector('.step-badge').textContent = '–';
+  });
+  if (ws) { try{ws.close();}catch(_){} ws = null; }
+  stopTimer(); document.getElementById('elapsed-timer').textContent = '00:00';
+}
+
+// ── Utils ──────────────────────────────────────────────────────────────────
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+// ── Boot ───────────────────────────────────────────────────────────────────
+(async function () {
+  let res;
+  try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
+  if (!res.ok) { window.location.href = '/static/login.html'; return; }
+  CURRENT_USER = await res.json();
+  bootApp();
+})();
+</script>
+</body>
+</html>
