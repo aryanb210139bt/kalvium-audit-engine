@@ -273,6 +273,15 @@ def test_sqlite_is_the_default_backend():
     assert is_postgres_enabled() is False
 
 
+def test_translate_sql_rewrites_sqlite_nocase_collation():
+    """Found via a real local Postgres run: SQLite's COLLATE NOCASE has no
+    Postgres equivalent by that name and raises psycopg.errors.
+    UndefinedObject. LOWER(col) reproduces the same case-insensitive
+    ordering associate_roster.list_names() relies on."""
+    assert translate_sql("SELECT name FROM associate_roster ORDER BY name COLLATE NOCASE") == \
+        "SELECT name FROM associate_roster ORDER BY LOWER(name)"
+
+
 def test_translate_sql_passthrough_for_plain_statements():
     """Ordinary statements (the vast majority in the 7 modules) only need
     the placeholder swap — verifies translate_sql doesn't touch anything

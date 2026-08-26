@@ -117,6 +117,16 @@ def translate_sql(sql: str) -> str:
         sql = sql.replace("INSERT OR IGNORE INTO", "INSERT INTO").rstrip() + " ON CONFLICT DO NOTHING"
     elif "INSERT OR REPLACE INTO" in sql:
         sql = _translate_or_replace(sql)
+    if "COLLATE NOCASE" in sql:
+        # SQLite's built-in case-insensitive collation has no Postgres
+        # equivalent by that name (found live: associate_roster.py's
+        # `ORDER BY name COLLATE NOCASE`, which raised
+        # psycopg.errors.UndefinedObject against a real Postgres server).
+        # LOWER(...) reproduces the same case-insensitive ordering without
+        # depending on any specific collation being installed on the
+        # target server. Only rewrites the exact "<col> COLLATE NOCASE"
+        # token, not the whole statement.
+        sql = re.sub(r"(\w+)\s+COLLATE NOCASE", r"LOWER(\1)", sql)
     return sql.replace("?", "%s")
 
 
