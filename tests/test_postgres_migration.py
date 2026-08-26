@@ -290,3 +290,171 @@ def test_translate_sql_passthrough_for_plain_statements():
         "SELECT * FROM sessions WHERE session_id=%s"
     assert translate_sql("UPDATE queued_jobs SET status='queued' WHERE job_id=?") == \
         "UPDATE queued_jobs SET status='queued' WHERE job_id=%s"
+
+
+# ── auth-schema collision fix: our auth tables use "kalvium_auth", never ───
+# ── the bare word "auth" (confirmed live: Supabase's own "auth" schema    ─
+# ── already has 22 tables of its own, including `users` and `sessions`). ──
+
+def test_our_auth_schema_is_kalvium_auth_not_auth():
+    """SCHEMA_DDL must register our tables under 'kalvium_auth' — never the
+    bare word 'auth', which a managed Postgres provider (confirmed:
+    Supabase) can pre-provision for its own built-in user system."""
+    schema_names = [name for name, _ in SCHEMA_DDL]
+    assert "kalvium_auth" in schema_names
+    assert "auth" not in schema_names
+
+
+def test_kalvium_auth_generates_users_and_sessions_tables():
+    """The kalvium_auth schema's DDL must create exactly our own users/
+    sessions tables (with our columns), not merely a schema named
+    kalvium_auth with nothing in it."""
+    by_name = dict(SCHEMA_DDL)
+    ddl_text = "\n".join(by_name["kalvium_auth"])
+    assert "CREATE TABLE IF NOT EXISTS users" in ddl_text
+    assert "CREATE TABLE IF NOT EXISTS sessions" in ddl_text
+    # Our own columns — proof this is our table, not a stand-in for
+    # Supabase's own auth.users (which has no such columns at all).
+    assert "password_hash" in ddl_text
+    assert "password_salt" in ddl_text
+    assert "associate_name" in ddl_text
+    # The FK from our sessions -> our users is schema-relative (no "auth."
+    # prefix), so it resolves against kalvium_auth via search_path
+    # regardless of what the schema is named — confirms the rename didn't
+    # require (and shouldn't require) touching the FK statement itself.
+    assert "REFERENCES users(user_id)" in ddl_text
+
+
+def test_apply_schema_never_targets_bare_auth():
+    """apply_schema() must reject (or simply not recognize) a bare 'auth'
+    schema name — it should only know about 'kalvium_auth'. This is the
+    function that would run CREATE SCHEMA/CREATE TABLE for real, so this
+    is the most direct guard against ever touching Supabase's native
+    schema by accident."""
+    from db.postgres_schema import apply_schema
+
+    class _RecordingConn:
+        def __init__(self):
+            self.statements = []
+
+        def execute(self, sql, params=()):
+            self.statements.append(sql)
+
+        def commit(self):
+            pass
+
+    conn = _RecordingConn()
+    try:
+        apply_schema(conn, "auth")
+        raised = False
+    except ValueError:
+        raised = True
+    assert raised, "apply_schema('auth') must be rejected — 'auth' is not a registered schema"
+    # And nothing was sent to any connection before the rejection.
+    assert not any('"auth"' in s for s in conn.statements)
+
+    # The real schema name works exactly as expected.
+    conn2 = _RecordingConn()
+    apply_schema(conn2, "kalvium_auth")
+    assert any('CREATE SCHEMA IF NOT EXISTS "kalvium_auth"' in s for s in conn2.statements)
+    assert not any('"auth"' in s and "kalvium_auth" not in s for s in conn2.statements)
+
+
+def test_auth_module_requests_kalvium_auth_schema_not_auth():
+    """auth.py's own _conn()/init_db() must ask db/pg.py for the
+    'kalvium_auth' schema specifically — never 'auth'. Verified by
+    monkeypatching is_postgres_enabled()/get_pg_connection so this runs
+    with zero real network access, but still exercises auth.py's actual
+    code path end to end."""
+    import auth as auth_module
+    import db.backend as backend_module
+
+    requested_schemas = []
+
+    class _FakeCompat:
+        def execute(self, sql, params=()):
+            class _Cur:
+                def fetchone(self):
+                    return None
+                def fetchall(self):
+                    return []
+            return _Cur()
+
+        def executemany(self, sql, seq):
+            pass
+
+        def commit(self):
+            pass
+
+    def fake_get_pg_connection(database_url, schema):
+        requested_schemas.append(schema)
+        return _FakeCompat()
+
+    orig_is_pg = backend_module.is_postgres_enabled
+    orig_get_url = backend_module.get_database_url
+    backend_module.is_postgres_enabled = lambda: True
+    backend_module.get_database_url = lambda: "postgresql://fake/for-this-test-only"
+
+    import db.pg as pg_module
+    orig_get_conn = pg_module.get_pg_connection
+    pg_module.get_pg_connection = fake_get_pg_connection
+
+    try:
+        auth_module._conn()
+    finally:
+        backend_module.is_postgres_enabled = orig_is_pg
+        backend_module.get_database_url = orig_get_url
+        pg_module.get_pg_connection = orig_get_conn
+
+    assert requested_schemas == ["kalvium_auth"]
+    assert "auth" not in requested_schemas
+
+
+def test_migration_mapping_routes_auth_db_to_kalvium_auth():
+    """scripts/migrate_sqlite_to_postgres.py's TABLES list must map
+    data/auth.db's users/sessions tables to the 'kalvium_auth' schema."""
+    auth_db_entries = [(table, schema) for db_path, table, schema in migrate.TABLES
+                        if db_path.name == "auth.db"]
+    assert set(auth_db_entries) == {("users", "kalvium_auth"), ("sessions", "kalvium_auth")}
+    assert all(schema == "kalvium_auth" for _, schema in auth_db_entries)
+    assert not any(schema == "auth" for _, schema in auth_db_entries)
+
+
+def test_no_pg_schema_code_path_uses_bare_auth_string():
+    """Static guard: scans the actual source of every Postgres schema/
+    migration file for a bare 'auth' schema literal used as code (not
+    inside an explanatory comment/docstring) — the kind of regression a
+    future edit could reintroduce without this test."""
+    import re
+    files = [
+        Path(__file__).parent.parent / "db" / "postgres_schema.py",
+        Path(__file__).parent.parent / "scripts" / "migrate_sqlite_to_postgres.py",
+        Path(__file__).parent.parent / "auth.py",
+    ]
+    # Matches a bare 'schema="auth"'-shaped literal used as an argument or
+    # tuple element — e.g. ("auth", ...), get_pg_connection(url, "auth"),
+    # apply_schema(conn, "auth") — but not "kalvium_auth" (word boundary).
+    bad_pattern = re.compile(r'(?<!kalvium_)["\']auth["\']\s*[,)]')
+    for f in files:
+        text = f.read_text()
+        for lineno, line in enumerate(text.splitlines(), start=1):
+            stripped = line.strip()
+            if stripped.startswith("#") or stripped.startswith('"""') or stripped.startswith("'"):
+                continue  # comment/docstring lines are explanatory, not code
+            assert not bad_pattern.search(line), (
+                f"{f.name}:{lineno} appears to use a bare 'auth' schema literal as code: {line!r}"
+            )
+
+
+# ── SQLite fallback remains completely unchanged by the rename ─────────────
+
+def test_sqlite_fallback_auth_db_path_and_table_names_unchanged():
+    """The rename only affects the Postgres schema name — auth.py's SQLite
+    DB_PATH, table names, and every CRUD function body must be untouched."""
+    import auth as auth_module
+    assert auth_module.DB_PATH.name == "auth.db"
+    # SQLite mode must still be selected by default (no env override here).
+    assert is_postgres_enabled() is False
+    users = auth_module.list_users()
+    assert isinstance(users, list)
+    assert any(u["email"] == "aryan@kalvium.com" for u in users)

@@ -24,15 +24,25 @@ the sequence when an explicit id is supplied.
 
 Each module gets its OWN Postgres schema (namespace), named after the
 module. That's what lets a bare table named `sessions` exist in both
-session_store and auth without colliding in the same Postgres database —
-each module's connection has its search_path pointed at just its own
-schema (+public), exactly mirroring "each module owned its own SQLite
-file" — so none of the 7 modules' CRUD call sites need to reference a
-schema-qualified name.
+session_store and kalvium_auth without colliding in the same Postgres
+database — each module's connection has its search_path pointed at just
+its own schema (+public), exactly mirroring "each module owned its own
+SQLite file" — so none of the 7 modules' CRUD call sites need to
+reference a schema-qualified name.
+
+NOTE — our auth.py module's Postgres schema is named "kalvium_auth", NOT
+"auth". A managed Postgres provider (e.g. Supabase) commonly pre-provisions
+its OWN "auth" schema for its own built-in user-management system
+(confirmed live against a real Supabase project: it already contains 22
+tables, including ones literally named `users` and `sessions`, with a
+completely different structure than ours). Using the reserved name "auth"
+here would silently target — or collide with — that schema instead of
+creating our own. "kalvium_auth" is deliberately app-specific and must
+never be renamed back to the bare word "auth".
 
 Statement order within each schema's list is parent-before-child so
 foreign keys always resolve on a fresh database:
-  auth:  users -> sessions
+  kalvium_auth:  users -> sessions
   deck:  deck_schemas -> deck_slides / deck_criteria -> paraphrases /
          call_links / coverage_results / schema_edit_log
 """
@@ -74,7 +84,7 @@ ACTIVITY_LOG = [
     "CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_log(timestamp)",
 ]
 
-AUTH = [
+KALVIUM_AUTH = [
     """CREATE TABLE IF NOT EXISTS users (
         user_id         TEXT PRIMARY KEY,
         email           TEXT UNIQUE NOT NULL,
@@ -228,8 +238,13 @@ DECK = [
 # schema_name -> ordered DDL statements (parent tables before child tables).
 # Cross-schema FKs don't exist anywhere in this app, so only within-schema
 # ordering matters — each module's own list above is already parent-first.
+#
+# "kalvium_auth", not "auth" — see the NOTE at the top of this file. Never
+# change this back to the bare word "auth"; that name is reserved by
+# Supabase (and likely other managed Postgres providers) for their own
+# built-in auth system's schema.
 SCHEMA_DDL = [
-    ("auth", AUTH),
+    ("kalvium_auth", KALVIUM_AUTH),
     ("session_store", SESSION_STORE),
     ("activity_log", ACTIVITY_LOG),
     ("associate_roster", ASSOCIATE_ROSTER),

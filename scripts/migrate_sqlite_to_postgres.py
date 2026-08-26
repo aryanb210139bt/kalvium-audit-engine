@@ -18,9 +18,12 @@ Safety guarantees:
     left exactly as it was before the script ran. Never a partially
     migrated database.
   - Schema is created/verified before any row is inserted, parent tables
-    before child tables (auth: users -> sessions; deck: deck_schemas ->
-    deck_slides/deck_criteria -> paraphrases/call_links/coverage_results) —
-    see db/postgres_schema.py.
+    before child tables (kalvium_auth: users -> sessions; deck: deck_schemas
+    -> deck_slides/deck_criteria -> paraphrases/call_links/coverage_results)
+    — see db/postgres_schema.py. Our auth tables target "kalvium_auth", not
+    "auth" — Supabase (and likely other managed Postgres providers)
+    reserves "auth" for its own built-in user system; this script never
+    creates, alters, or inserts into that schema.
   - Idempotent: every insert uses `ON CONFLICT DO NOTHING` against the
     same primary/unique keys as the source SQLite table, so re-running
     this script after a failure (or a no-op re-run once already migrated)
@@ -65,10 +68,12 @@ except ImportError:
 
 DATA = ROOT / "data"
 
-# (sqlite_file, table, pg_schema) — parents before children within each schema.
+# (sqlite_file, table, pg_schema) — parents before children within each
+# schema. auth.db's tables map to "kalvium_auth", NOT "auth" — see the
+# module docstring above; "auth" is Supabase's own reserved schema.
 TABLES = [
-    (DATA / "auth.db",             "users",                      "auth"),
-    (DATA / "auth.db",             "sessions",                   "auth"),
+    (DATA / "auth.db",             "users",                      "kalvium_auth"),
+    (DATA / "auth.db",             "sessions",                   "kalvium_auth"),
     (DATA / "sessions.db",         "sessions",                   "session_store"),
     (DATA / "activity_log.db",     "activity_log",               "activity_log"),
     (DATA / "associate_roster.db", "associate_roster",           "associate_roster"),

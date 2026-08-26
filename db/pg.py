@@ -46,8 +46,10 @@ branch here. That's achieved by:
   3. Each module gets its own Postgres SCHEMA (namespace), named after the
      module, with every checked-out connection's search_path pointed at it
      on checkout — see db/postgres_schema.py. That's what lets `sessions`
-     exist in both session_store and auth without colliding, exactly as it
-     does today living in two separate SQLite files.
+     exist in both session_store and kalvium_auth without colliding,
+     exactly as it does today living in two separate SQLite files. (auth.py
+     uses "kalvium_auth", not the bare word "auth" — see db/postgres_schema.py
+     for why: Supabase reserves "auth" for its own built-in user system.)
 
 SAFETY: the DATABASE_URL value is used only to open connections. It is
 never stored on this module, never logged, never printed, and every error
