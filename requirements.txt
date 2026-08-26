@@ -6,6 +6,9 @@ pydantic-settings>=2.3.0
 python-multipart>=0.0.9
 python-dotenv>=1.0.0
 
+# PostgreSQL driver (only used when DB_BACKEND=postgres — see db/pg.py)
+psycopg[binary]>=3.1
+
 # OpenAI — LLM audit layer + translation
 openai>=1.30.0
 

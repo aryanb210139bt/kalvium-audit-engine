@@ -127,6 +127,23 @@ _recovered = job_queue.recover_orphaned()
 if _recovered:
     logger.info(f"Recovered {_recovered} job(s) orphaned by a previous restart — reset to 'queued'")
 
+# ── Database backend startup check (sqlite | postgres) ───────────────────────
+# Never logs DATABASE_URL — only the backend name and a fixed, generic
+# connectivity message. See db/backend.py, db/pg.py.
+from db.backend import is_postgres_enabled, get_database_url, database_configured
+if is_postgres_enabled():
+    from db.pg import health_check as _db_health_check
+    _pg_ok, _pg_msg = _db_health_check(get_database_url())
+    (logger.info if _pg_ok else logger.error)(f"[db] backend=postgres check={_pg_msg}")
+    if not _pg_ok:
+        logger.error("[db] DB_BACKEND=postgres but PostgreSQL is not reachable at startup — "
+                     "requests touching the database will fail until this is fixed.")
+else:
+    logger.info(
+        f"[db] backend=sqlite (DATABASE_URL {'is' if database_configured() else 'is not'} configured, "
+        f"but DB_BACKEND is not 'postgres' so it is not used)"
+    )
+
 
 # ── Auth dependencies ──────────────────────────────────────────────────────────
 
@@ -142,6 +159,22 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     if user["role"] != "admin":
         raise HTTPException(403, "Admin access required")
     return user
+
+
+@app.get("/api/v1/health/db")
+async def health_db(admin: dict = Depends(require_admin)):
+    """Admin-only. Reports which database backend is active and whether it's
+    reachable — never the connection string or any credential, only a fixed
+    generic status message (see db/backend.py, db/pg.py)."""
+    from db.backend import is_postgres_enabled, database_configured
+    backend = "postgres" if is_postgres_enabled() else "sqlite"
+    if backend == "sqlite":
+        return {"backend": "sqlite", "ok": True, "message": "Using local SQLite files",
+                "database_url_configured": database_configured()}
+    from db.backend import get_database_url
+    from db.pg import health_check as _db_health_check
+    ok, message = _db_health_check(get_database_url())
+    return {"backend": "postgres", "ok": ok, "message": message}
 
 
 def _add_to_history(session_id: str, sess: dict):

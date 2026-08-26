@@ -45,6 +45,14 @@ class Settings(BaseSettings):
     upload_dir: Path = Path("/Users/apple/Desktop/demo audit/demo audit without sarvam")
     max_upload_size_mb: int = 1000
 
+    # Database backend — "sqlite" (default, current behavior) or "postgres".
+    # Only set db_backend="postgres" after scripts/migrate_sqlite_to_postgres.py
+    # has succeeded (its verification report shows every table matching) —
+    # see CLOUD_MIGRATION_PLAN.md. NEVER log/print database_url anywhere;
+    # it's a full connection string with credentials.
+    database_url: str = ""
+    db_backend: str = "sqlite"
+
     @property
     def max_upload_bytes(self) -> int:
         return self.max_upload_size_mb * 1024 * 1024

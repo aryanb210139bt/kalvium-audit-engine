@@ -42,7 +42,11 @@ _SEED_NAMES = [
 ]
 
 
-def _conn() -> sqlite3.Connection:
+def _conn():
+    from db.backend import is_postgres_enabled, get_database_url
+    if is_postgres_enabled():
+        from db.pg import get_pg_connection
+        return get_pg_connection(get_database_url(), "associate_roster")
     if not hasattr(_local, "conn") or _local.conn is None:
         _local.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         _local.conn.row_factory = sqlite3.Row
@@ -51,6 +55,19 @@ def _conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    from db.backend import is_postgres_enabled
+    if is_postgres_enabled():
+        from db.postgres_schema import apply_schema
+        apply_schema(_conn(), "associate_roster")
+        db = _conn()
+        if not db.execute("SELECT 1 FROM associate_roster LIMIT 1").fetchone():
+            now = datetime.utcnow().isoformat()
+            db.executemany(
+                "INSERT OR IGNORE INTO associate_roster (name, added_at) VALUES (?,?)",
+                [(n, now) for n in _SEED_NAMES],
+            )
+            db.commit()
+        return
     db = _conn()
     db.executescript("""
     CREATE TABLE IF NOT EXISTS associate_roster (
