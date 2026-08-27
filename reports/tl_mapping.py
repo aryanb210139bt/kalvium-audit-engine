@@ -15,9 +15,13 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 TL_MAP_PATH = Path("data/associate_tl_map.json")
+_R2_KEY = "config/associate_tl_map.json"
 
 
 def load_tl_map() -> dict:
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(TL_MAP_PATH, _R2_KEY)
+
     if TL_MAP_PATH.exists():
         try:
             return json.loads(TL_MAP_PATH.read_text())
@@ -29,6 +33,9 @@ def load_tl_map() -> dict:
 def save_tl_map(mapping: dict) -> None:
     TL_MAP_PATH.parent.mkdir(parents=True, exist_ok=True)
     TL_MAP_PATH.write_text(json.dumps(mapping, indent=2, ensure_ascii=False))
+
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(TL_MAP_PATH, _R2_KEY, content_type="application/json")
 
 
 def lookup_tl(associate_name: str) -> str:

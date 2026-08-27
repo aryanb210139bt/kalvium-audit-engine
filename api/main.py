@@ -24,7 +24,7 @@ from typing import Optional
 
 from fastapi import FastAPI, File, Form, UploadFile, HTTPException, WebSocket, WebSocketDisconnect, Body, Request, Depends
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, Response, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -144,6 +144,26 @@ else:
         f"but DB_BACKEND is not 'postgres' so it is not used)"
     )
 
+# ── Object storage backend startup check (local | r2) — independent of the
+# database backend check above. Never logs R2 credentials — only the
+# backend name and a fixed, generic connectivity message. See
+# storage/backend.py, storage/r2.py.
+from storage.backend import is_r2_enabled, r2_configured
+if is_r2_enabled():
+    from storage.r2 import health_check as _r2_health_check
+    _r2_ok, _r2_msg = _r2_health_check()
+    (logger.info if _r2_ok else logger.error)(f"[storage] backend=r2 check={_r2_msg}")
+    if not _r2_ok:
+        logger.error("[storage] STORAGE_BACKEND=r2 but R2 is not reachable at startup — "
+                     "persistent-file writes (video screenshots, Excel tracker, Google "
+                     "Sheets auth) will still succeed locally, but each R2 sync attempt "
+                     "will keep failing (logged individually) until this is fixed.")
+else:
+    logger.info(
+        f"[storage] backend=local (R2 {'is' if r2_configured() else 'is not'} configured, "
+        f"but STORAGE_BACKEND is not 'r2' so it is not used)"
+    )
+
 
 # ── Auth dependencies ──────────────────────────────────────────────────────────
 
@@ -175,6 +195,20 @@ async def health_db(admin: dict = Depends(require_admin)):
     from db.pg import health_check as _db_health_check
     ok, message = _db_health_check(get_database_url())
     return {"backend": "postgres", "ok": ok, "message": message}
+
+
+@app.get("/api/v1/health/storage")
+async def health_storage(admin: dict = Depends(require_admin)):
+    """Admin-only. Reports which object-storage backend is active and
+    whether it's reachable — never any credential, only a fixed generic
+    status message (see storage/backend.py, storage/r2.py)."""
+    from storage.backend import is_r2_enabled, r2_configured
+    if not is_r2_enabled():
+        return {"backend": "local", "ok": True, "message": "Using local disk",
+                "r2_configured": r2_configured()}
+    from storage.r2 import health_check as _r2_health_check
+    ok, message = _r2_health_check()
+    return {"backend": "r2", "ok": ok, "message": message}
 
 
 def _add_to_history(session_id: str, sess: dict):
@@ -1383,6 +1417,50 @@ def _cleanup_upload_dir(upload_dir: Path) -> None:
         logger.warning(f"Cleanup failed for {upload_dir}: {e}")
 
 
+def _persist_screenshots_to_r2(video_audit_id: str, out_dir: Path, screenshots: list[dict]) -> None:
+    """
+    If STORAGE_BACKEND=r2, uploads each successfully-extracted screenshot
+    to R2 (key: audits/{video_audit_id}/screenshots/{filename}) and adds
+    r2_key/content_type/size_bytes to that screenshot's dict IN PLACE, so
+    they land in screenshots_json when video_audit_store.complete() saves
+    it right after this call. Only deletes the local out_dir once every
+    screenshot has been confirmed uploaded — if any upload fails, the
+    local copies are left in place as a fallback and the screenshot
+    endpoint below will keep serving them locally. No-op entirely when
+    STORAGE_BACKEND=local (the default) — behavior is then identical to
+    before this feature existed.
+    """
+    from storage.backend import is_r2_enabled
+    if not is_r2_enabled():
+        return
+
+    from storage.r2 import upload_file, StorageError
+
+    all_ok = True
+    for shot in screenshots:
+        if shot.get("extract_failed") or not shot.get("filename"):
+            continue
+        local_path = out_dir / shot["filename"]
+        if not local_path.exists():
+            continue
+        key = f"audits/{video_audit_id}/screenshots/{shot['filename']}"
+        try:
+            upload_file(local_path, key, content_type="image/jpeg")
+            shot["r2_key"] = key
+            shot["content_type"] = "image/jpeg"
+            shot["size_bytes"] = local_path.stat().st_size
+        except StorageError as exc:
+            all_ok = False
+            logger.error(f"Failed to persist screenshot {shot['filename']} for "
+                         f"video_audit {video_audit_id} to R2: {type(exc).__name__}: {exc}")
+
+    if all_ok:
+        try:
+            shutil.rmtree(out_dir, ignore_errors=True)
+        except Exception as exc:
+            logger.warning(f"Could not clean up local screenshots for {video_audit_id}: {exc}")
+
+
 def _preprocess_and_analyze_video(video_path: Path, video_audit_id: str, linked_session_id: str,
                                    label: str, actor: str) -> None:
     """
@@ -1452,6 +1530,12 @@ def _preprocess_and_analyze_video(video_path: Path, video_audit_id: str, linked_
 
         video_audit_store.update_status(video_audit_id, "summarizing")
         summary = vision_analyzer.summarize_video([s["analysis"] for s in screenshots])
+
+        # Screenshots have now been read for analysis and won't be needed
+        # locally again this run — persist them to R2 (if enabled) before
+        # they're recorded as complete, so screenshots_json includes each
+        # one's r2_key from the start.
+        _persist_screenshots_to_r2(video_audit_id, out_dir, screenshots)
 
         video_audit_store.complete(video_audit_id, screenshots, summary, datetime.utcnow().isoformat())
         _log("video_analysis_completed", {"summary": summary})
@@ -1919,12 +2003,36 @@ async def get_video_audit(video_audit_id: str):
     return rec
 
 
+SCREENSHOT_PRESIGNED_URL_EXPIRY_SECONDS = 1800  # 30 min — long enough for one UI viewing session
+
+
 @app.get("/api/v1/video-audit/{video_audit_id}/screenshot/{filename}")
 async def get_video_audit_screenshot(video_audit_id: str, filename: str):
     # filename comes only from our own stored screenshots_json (never raw user
     # input), but validate anyway before it touches the filesystem.
     if "/" in filename or ".." in filename:
         raise HTTPException(400, "Invalid filename")
+
+    # If this screenshot was persisted to R2 (STORAGE_BACKEND=r2 at the time
+    # it was analyzed), redirect to a short-lived presigned URL rather than
+    # exposing a Render filesystem path — the bucket itself stays private.
+    rec = video_audit_store.get(video_audit_id)
+    if rec:
+        shot = next((s for s in rec.get("screenshots", []) if s.get("filename") == filename), None)
+        if shot and shot.get("r2_key"):
+            from storage.r2 import generate_presigned_download_url, StorageError
+            try:
+                url = generate_presigned_download_url(
+                    shot["r2_key"], expires_in=SCREENSHOT_PRESIGNED_URL_EXPIRY_SECONDS
+                )
+                return RedirectResponse(url)
+            except StorageError as exc:
+                logger.error(f"Could not generate presigned URL for screenshot "
+                             f"{video_audit_id}/{filename}: {type(exc).__name__}: {exc}")
+                raise HTTPException(502, "Could not retrieve screenshot from storage")
+
+    # Local mode (or legacy pre-R2 data with no r2_key) — serve the file
+    # directly from local disk, exactly as before this feature existed.
     path = video_audit_store.screenshot_path(video_audit_id, filename)
     if not path.exists():
         raise HTTPException(404, "Screenshot not found")
@@ -1991,9 +2099,11 @@ async def upload_google_credentials(file: UploadFile = File(...)):
             raise ValueError("Invalid credentials.json — expected 'web' or 'installed' key")
     except Exception as e:
         raise HTTPException(400, f"Invalid credentials file: {e}")
-    from reports.google_sheets_manager import CREDENTIALS_PATH, DATA_DIR
+    from reports.google_sheets_manager import CREDENTIALS_PATH, DATA_DIR, _R2_KEY_CREDENTIALS
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CREDENTIALS_PATH.write_bytes(content)
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS, content_type="application/json")
     return {"status": "uploaded"}
 
 
