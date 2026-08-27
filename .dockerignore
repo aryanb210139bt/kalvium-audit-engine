@@ -1,0 +1,52 @@
+# Never bake secrets or local state into the image — Render injects real
+# env vars at runtime; nothing here should ever be needed inside the image.
+.env
+.env.*
+!.env.example
+
+# Local application data / temp processing — created fresh on Render's own
+# disk at runtime, never shipped in the image.
+data/
+uploads/
+tmp_uploads/
+outputs/
+tmp/
+temp/
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+.mypy_cache/
+
+# Git / IDE / OS
+.git/
+.gitignore
+.vscode/
+.idea/
+.DS_Store
+
+# Generated media / reports (never committed, never needed in the image)
+*.mp4
+*.mov
+*.avi
+*.mkv
+*.webm
+*.wav
+*.mp3
+*.m4a
+*.pdf
+*.xlsx
+
+# Local secrets / credentials
+credentials.json
+token.json
+service-account*.json
+
+# Docs not needed at runtime
+CLOUD_MIGRATION_PLAN.md
+README.md

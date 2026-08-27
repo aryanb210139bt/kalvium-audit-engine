@@ -36,7 +36,18 @@ PBKDF2_ITERS     = 200_000
 _local = threading.local()
 
 
-def _conn() -> sqlite3.Connection:
+def _conn():
+    from db.backend import is_postgres_enabled, get_database_url
+    if is_postgres_enabled():
+        from db.pg import get_pg_connection
+        # "kalvium_auth", NOT "auth" — a managed Postgres provider (e.g.
+        # Supabase) commonly pre-provisions its OWN "auth" schema for its
+        # own built-in user system (confirmed live: Supabase's real "auth"
+        # schema already has 22 tables, including ones named `users` and
+        # `sessions`, structurally unrelated to ours). Using the bare word
+        # "auth" here would target/collide with that instead of our own
+        # tables. Never rename this back to "auth".
+        return get_pg_connection(get_database_url(), "kalvium_auth")
     if not hasattr(_local, "conn") or _local.conn is None:
         _local.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         _local.conn.row_factory = sqlite3.Row
@@ -45,6 +56,12 @@ def _conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    from db.backend import is_postgres_enabled
+    if is_postgres_enabled():
+        from db.postgres_schema import apply_schema
+        apply_schema(_conn(), "kalvium_auth")
+        _seed_initial_admin()
+        return
     db = _conn()
     db.executescript("""
     CREATE TABLE IF NOT EXISTS users (

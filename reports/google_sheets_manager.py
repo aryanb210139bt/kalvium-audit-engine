@@ -20,6 +20,13 @@ TOKEN_PATH        = DATA_DIR / "google_token.json"
 CONFIG_PATH       = DATA_DIR / "google_config.json"
 _PKCE_VERIFIER_PATH = DATA_DIR / "google_oauth_verifier.txt"
 
+# R2 keys, one per file above — see storage/persistent_file.py. All are
+# no-ops unless STORAGE_BACKEND=r2.
+_R2_KEY_CREDENTIALS = "integrations/google_sheets/credentials.json"
+_R2_KEY_TOKEN       = "integrations/google_sheets/token.json"
+_R2_KEY_CONFIG      = "integrations/google_sheets/config.json"
+_R2_KEY_PKCE        = "integrations/google_sheets/oauth_verifier.txt"
+
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     # Read-only file listing (id/name only, not content) — needed so the app
@@ -31,6 +38,8 @@ SCOPES = [
 # ── Config helpers ────────────────────────────────────────────────────────────
 
 def get_config() -> dict:
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(CONFIG_PATH, _R2_KEY_CONFIG)
     if CONFIG_PATH.exists():
         try:
             return json.loads(CONFIG_PATH.read_text())
@@ -42,13 +51,19 @@ def get_config() -> dict:
 def save_config(cfg: dict):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_PATH.write_text(json.dumps(cfg, indent=2))
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(CONFIG_PATH, _R2_KEY_CONFIG, content_type="application/json")
 
 
 def has_credentials() -> bool:
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
     return CREDENTIALS_PATH.exists()
 
 
 def has_token() -> bool:
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
     return TOKEN_PATH.exists()
 
 
@@ -56,6 +71,9 @@ def has_token() -> bool:
 
 def get_auth_url(redirect_uri: str) -> str:
     """Build the Google OAuth consent URL and return it."""
+    from storage.persistent_file import sync_from_r2_if_missing, sync_to_r2
+    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
+
     from google_auth_oauthlib.flow import Flow
     flow = Flow.from_client_secrets_file(str(CREDENTIALS_PATH), scopes=SCOPES)
     flow.redirect_uri = redirect_uri
@@ -71,6 +89,7 @@ def get_auth_url(redirect_uri: str) -> str:
     # exchange fails with "invalid_grant: Missing code verifier".
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     _PKCE_VERIFIER_PATH.write_text(flow.code_verifier)
+    sync_to_r2(_PKCE_VERIFIER_PATH, _R2_KEY_PKCE, content_type="text/plain")
     return auth_url
 
 
@@ -78,11 +97,16 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
     """Exchange auth code for tokens and persist them. Returns user info."""
     from google_auth_oauthlib.flow import Flow
     from googleapiclient.discovery import build
+    from storage.persistent_file import sync_from_r2_if_missing, delete_from_r2
+
+    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
+    sync_from_r2_if_missing(_PKCE_VERIFIER_PATH, _R2_KEY_PKCE)
 
     code_verifier = None
     if _PKCE_VERIFIER_PATH.exists():
         code_verifier = _PKCE_VERIFIER_PATH.read_text().strip()
         _PKCE_VERIFIER_PATH.unlink()   # one-time use
+        delete_from_r2(_R2_KEY_PKCE)
 
     flow = Flow.from_client_secrets_file(
         str(CREDENTIALS_PATH), scopes=SCOPES, code_verifier=code_verifier
@@ -107,10 +131,14 @@ def exchange_code(code: str, redirect_uri: str) -> dict:
 def _save_token(creds):
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     TOKEN_PATH.write_text(creds.to_json())
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(TOKEN_PATH, _R2_KEY_TOKEN, content_type="application/json")
 
 
 def get_credentials():
     """Return valid (auto-refreshed) credentials or None."""
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
     if not TOKEN_PATH.exists():
         return None
     from google.oauth2.credentials import Credentials
@@ -128,6 +156,8 @@ def get_credentials():
 
 def get_connected_email() -> str:
     """Return the email stored in the token file, or empty string."""
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
     if not TOKEN_PATH.exists():
         return ""
     try:
@@ -147,8 +177,10 @@ def get_connected_email() -> str:
 
 def disconnect():
     """Remove stored token and config."""
+    from storage.persistent_file import delete_from_r2
     if TOKEN_PATH.exists():
         TOKEN_PATH.unlink()
+    delete_from_r2(_R2_KEY_TOKEN)
 
 
 # ── Sheet operations ──────────────────────────────────────────────────────────

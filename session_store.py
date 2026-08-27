@@ -26,7 +26,11 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 _local = threading.local()
 
 
-def _conn() -> sqlite3.Connection:
+def _conn():
+    from db.backend import is_postgres_enabled, get_database_url
+    if is_postgres_enabled():
+        from db.pg import get_pg_connection
+        return get_pg_connection(get_database_url(), "session_store")
     if not hasattr(_local, "conn") or _local.conn is None:
         _local.conn = sqlite3.connect(str(DB_PATH), check_same_thread=False)
         _local.conn.row_factory = sqlite3.Row
@@ -35,6 +39,11 @@ def _conn() -> sqlite3.Connection:
 
 
 def init_db() -> None:
+    from db.backend import is_postgres_enabled
+    if is_postgres_enabled():
+        from db.postgres_schema import apply_schema
+        apply_schema(_conn(), "session_store")
+        return
     db = _conn()
     db.executescript("""
     CREATE TABLE IF NOT EXISTS sessions (

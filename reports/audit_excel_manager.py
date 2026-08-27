@@ -13,6 +13,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 MASTER_PATH = Path("data/audit_records.xlsx")
+_R2_KEY = "tracker/audit_records.xlsx"
 
 # ── Exact column headers matching the original tracker ────────────────────────
 # Source Of Webinar, Campaign level, the blank spacer column, and Whether
@@ -126,6 +127,12 @@ def _get_or_create_wb():
     """Load the master workbook or create it with styled headers if missing."""
     from openpyxl import Workbook, load_workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from storage.persistent_file import sync_from_r2_if_missing
+
+    # If STORAGE_BACKEND=r2, recover the latest master file from R2 first —
+    # this is what makes it survive a Render restart/redeploy. No-op in
+    # local mode, and a no-op here if the file already exists locally.
+    sync_from_r2_if_missing(MASTER_PATH, _R2_KEY)
 
     if MASTER_PATH.exists():
         return load_workbook(str(MASTER_PATH))
@@ -210,6 +217,10 @@ def append_audit_row(row_data: dict) -> int:
     ws.row_dimensions[next_row].height = 18
     wb.save(str(MASTER_PATH))
     logger.info(f"{'Updated' if existing_row else 'Appended'} audit row {next_row} in {MASTER_PATH}")
+
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(MASTER_PATH, _R2_KEY,
+               content_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     return next_row
 
 

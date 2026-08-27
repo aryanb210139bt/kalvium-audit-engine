@@ -1,0 +1,66 @@
+# Render Blueprint — see https://render.com/docs/blueprint-spec
+#
+# `sync: false` means: this variable is required, but its VALUE is never
+# stored here or in git — Render prompts you to fill it in via the
+# dashboard the first time this blueprint is applied, and it stays only
+# in Render's own encrypted env var store from then on. Never put a real
+# secret value in this file.
+#
+# This deployment phase: SQLite (DB_BACKEND=sqlite) + R2 for persistent
+# files (STORAGE_BACKEND=r2). Postgres/DATABASE_URL are intentionally not
+# declared here yet — add them when that phase is ready; DB_BACKEND can
+# then be flipped to postgres without touching anything else in this file.
+
+services:
+  - type: web
+    name: kalvium-audit-engine
+    env: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /health
+    envVars:
+      # ── LLM / STT APIs — secret ────────────────────────────────────────
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: SARVAM_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+
+      # ── STT / diarization config — not secret ──────────────────────────
+      - key: STT_PROVIDER
+        value: auto
+      - key: WHISPER_MODEL_SIZE
+        value: large-v3
+      - key: WHISPER_DEVICE
+        value: cpu
+      - key: DIARIZATION_PROVIDER
+        value: auto
+
+      # ── Temporary processing storage — local Render disk, cleaned up
+      #    after every pipeline run; never treated as persistent ─────────
+      - key: UPLOAD_DIR
+        value: tmp_uploads
+      - key: MAX_UPLOAD_SIZE_MB
+        value: "1000"
+
+      # ── Database backend — SQLite for this phase ────────────────────────
+      - key: DB_BACKEND
+        value: sqlite
+
+      # ── Object storage backend — R2 for this phase ──────────────────────
+      - key: STORAGE_BACKEND
+        value: r2
+      - key: R2_BUCKET_NAME
+        value: kalvium-audit-storage
+      - key: R2_REGION
+        value: auto
+      - key: R2_ENDPOINT_URL
+        sync: false
+      - key: R2_ACCESS_KEY_ID
+        sync: false
+      - key: R2_SECRET_ACCESS_KEY
+        sync: false

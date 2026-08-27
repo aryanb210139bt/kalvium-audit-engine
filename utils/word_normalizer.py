@@ -19,6 +19,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 _MAPPINGS_PATH = Path("data/word_mappings.json")
+_R2_KEY = "config/word_mappings.json"
 
 # ── Built-in defaults (shipped with the system) ───────────────────────────────
 _DEFAULT_MAPPINGS: list[dict] = [
@@ -40,6 +41,9 @@ _DEFAULT_MAPPINGS: list[dict] = [
 
 def load_mappings() -> list[dict]:
     """Return merged list of built-in + user-defined mappings."""
+    from storage.persistent_file import sync_from_r2_if_missing
+    sync_from_r2_if_missing(_MAPPINGS_PATH, _R2_KEY)
+
     user: list[dict] = []
     if _MAPPINGS_PATH.exists():
         try:
@@ -61,6 +65,9 @@ def save_mappings(mappings: list[dict]):
     # Only save non-builtin entries to disk
     to_save = [m for m in mappings if not m.get("builtin")]
     _MAPPINGS_PATH.write_text(json.dumps(to_save, indent=2, ensure_ascii=False))
+
+    from storage.persistent_file import sync_to_r2
+    sync_to_r2(_MAPPINGS_PATH, _R2_KEY, content_type="application/json")
 
 
 # Pre-compile patterns once per process (rebuilt when mappings change)
