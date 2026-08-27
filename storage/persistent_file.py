@@ -32,17 +32,39 @@ logger = logging.getLogger(__name__)
 
 
 def sync_from_r2_if_missing(local_path: Path, key: str) -> None:
-    """If R2 is enabled and `local_path` doesn't exist locally, download it
-    from R2 first. No-op in local mode. No-op (logged, not raised) if R2
-    is enabled but the object doesn't exist yet there either — that's the
-    normal "first time ever" case, the caller's existing
-    create-if-missing logic takes over from here."""
+    """Keeps `local_path` and R2's `key` reconciled in the two directions
+    that matter for this app's singleton config files. No-op in local
+    mode either way.
+
+      - local_path MISSING (fresh/restarted instance): download it from
+        R2 first. No-op (logged, not raised) if R2 doesn't have it yet
+        either — that's the normal "first time ever" case, the caller's
+        existing create-if-missing logic takes over from here.
+      - local_path EXISTS but R2 doesn't have `key` yet: upload it —
+        this is the one-time backfill that matters the first time R2 is
+        switched on for a file that was already sitting on local disk
+        (e.g. a Google OAuth token established before this feature
+        existed). Without this, that file would never reach R2 until it
+        happened to be rewritten, and would be silently lost on the very
+        next restart despite "looking" persisted.
+      - local_path exists AND R2 already has `key`: no-op — local wins,
+        never overwrites a possibly newer R2 copy just from a read.
+    """
     from storage.backend import is_r2_enabled
     if not is_r2_enabled():
         return
+    from storage.r2 import (
+        download_file, upload_file, object_exists, StorageNotFoundError, StorageError,
+    )
     if local_path.exists():
+        try:
+            if not object_exists(key):
+                upload_file(local_path, key)
+                logger.info(f"Backfilled {local_path.name} to R2 (key={key}) — "
+                            f"existed locally but not in R2 yet")
+        except StorageError as exc:
+            logger.warning(f"Could not backfill {local_path.name} to R2 ({type(exc).__name__}): {exc}")
         return
-    from storage.r2 import download_file, StorageNotFoundError, StorageError
     try:
         download_file(key, local_path)
         logger.info(f"Recovered {local_path.name} from R2 (key={key})")

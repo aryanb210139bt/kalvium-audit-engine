@@ -10,43 +10,92 @@ environment, but these tests would still pass without it, since
 get_r2_client() itself is monkeypatched/mocked rather than exercised for
 real. Live connectivity is exercised only by scripts/test_r2.py, run
 manually by a human with real credentials — never by this suite.
+
+IMPORTANT: these tests must never assume anything about the ambient
+.env/environment on the machine running them — a developer's real .env
+may legitimately have STORAGE_BACKEND=r2 and real R2 credentials set (as
+this project's own local dev environment does). Every test that cares
+about a *specific* configuration state monkeypatches config.settings.
+get_settings (as imported into storage.backend) with a fake settings
+object, rather than asserting on whatever get_settings() actually
+returns right now.
 """
 from __future__ import annotations
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from storage.backend import is_r2_enabled, storage_backend, r2_configured, get_r2_config
+import storage.backend as backend
+from storage.backend import get_r2_config
 import storage.r2 as r2
+
+
+def _fake_settings(**overrides) -> SimpleNamespace:
+    """A minimal stand-in for config.settings.Settings with just the
+    fields storage/backend.py reads, defaulting to the "unconfigured,
+    local" state regardless of what this machine's real .env contains."""
+    defaults = dict(
+        storage_backend="local",
+        r2_endpoint_url="",
+        r2_bucket_name="kalvium-audit-storage",
+        r2_access_key_id="",
+        r2_secret_access_key="",
+        r2_region="auto",
+    )
+    defaults.update(overrides)
+    return SimpleNamespace(**defaults)
 
 
 # ── Configuration loading / local-vs-R2 backend selection ──────────────────
 
-def test_storage_backend_defaults_to_local():
-    assert storage_backend() == "local"
-    assert is_r2_enabled() is False
+def test_storage_backend_defaults_to_local(monkeypatch):
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings())
+    assert backend.storage_backend() == "local"
+    assert backend.is_r2_enabled() is False
 
 
-def test_r2_not_configured_by_default():
-    """With no R2_* env vars set, r2_configured() must be False — this is
+def test_storage_backend_r2_when_explicitly_set(monkeypatch):
+    """The other half of the same switch — confirms is_r2_enabled() does
+    turn on when storage_backend='r2', not just that it stays off by
+    default."""
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings(storage_backend="r2"))
+    assert backend.storage_backend() == "r2"
+    assert backend.is_r2_enabled() is True
+
+
+def test_r2_not_configured_by_default(monkeypatch):
+    """With no R2_* values set, r2_configured() must be False — this is
     what keeps the app fully runnable locally with R2 untouched."""
-    assert r2_configured() is False
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings())
+    assert backend.r2_configured() is False
 
 
-def test_get_r2_config_shape():
+def test_r2_configured_when_all_values_present(monkeypatch):
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings(
+        r2_endpoint_url="https://example.r2.cloudflarestorage.com",
+        r2_access_key_id="fake-key-id",
+        r2_secret_access_key="fake-secret",
+    ))
+    assert backend.r2_configured() is True
+
+
+def test_get_r2_config_shape(monkeypatch):
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings())
     cfg = get_r2_config()
     assert set(cfg.keys()) == {"endpoint_url", "bucket_name", "access_key_id", "secret_access_key", "region"}
     assert cfg["bucket_name"] == "kalvium-audit-storage"  # the documented default
     assert cfg["region"] == "auto"
 
 
-def test_get_r2_client_raises_config_error_when_unconfigured():
+def test_get_r2_client_raises_config_error_when_unconfigured(monkeypatch):
     """Calling into R2 with no credentials configured must raise a clear,
     generic StorageConfigError — never a raw boto3/botocore exception,
     and never anything that could contain a credential (there isn't one
     to leak here, since none is configured)."""
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings())
     try:
         r2.get_r2_client()
         raised = False
@@ -261,7 +310,8 @@ def test_delete_failure_raises_storage_delete_error(monkeypatch):
     assert isinstance(raised, r2.StorageDeleteError)
 
 
-def test_health_check_reports_not_configured():
+def test_health_check_reports_not_configured(monkeypatch):
+    monkeypatch.setattr(backend, "get_settings", lambda: _fake_settings())
     ok, msg = r2.health_check()
     assert ok is False
     assert msg == "R2 is not configured"
@@ -273,7 +323,16 @@ def test_sync_helpers_are_noop_in_local_mode(tmp_path, monkeypatch):
     """The default (STORAGE_BACKEND=local) must make every sync helper a
     complete no-op — this is what guarantees zero behavior change for
     every existing caller (audit_excel_manager, google_sheets_manager,
-    word_normalizer, tl_mapping) unless R2 is explicitly enabled."""
+    word_normalizer, tl_mapping) unless R2 is explicitly enabled.
+
+    Explicitly forced to "local" here regardless of this machine's real
+    .env (which may legitimately have STORAGE_BACKEND=r2 set) — without
+    this, this test would silently make a REAL network call against the
+    real bucket on any machine where R2 happens to be enabled, which is
+    exactly what happened once during development of this test (a stray
+    config/thing.json object was left in the real bucket and had to be
+    manually cleaned up)."""
+    monkeypatch.setattr(backend, "is_r2_enabled", lambda: False)
     import storage.persistent_file as pf
 
     local_path = tmp_path / "thing.json"
@@ -335,22 +394,54 @@ def test_sync_from_r2_if_missing_calls_download_when_r2_enabled_and_missing_loca
 
 
 def test_sync_from_r2_if_missing_skips_download_when_local_file_already_present(tmp_path, monkeypatch):
-    """Must not overwrite a local file that already exists — sync-if-missing,
-    not sync-always."""
+    """Must not overwrite a local file that already exists with an R2 copy
+    — sync-if-missing, not sync-always. (R2 already having the object too
+    means there's nothing to backfill either — see the backfill test
+    below for the complementary case.)"""
     import storage.backend as backend
     import storage.persistent_file as pf
 
     monkeypatch.setattr(backend, "is_r2_enabled", lambda: True)
-    was_called = {"n": 0}
+    download_called = {"n": 0}
+    upload_called = {"n": 0}
 
-    def fake_download_file(key, local_path):
-        was_called["n"] += 1
-
-    monkeypatch.setattr("storage.r2.download_file", fake_download_file)
+    monkeypatch.setattr("storage.r2.download_file", lambda key, local_path: download_called.__setitem__("n", download_called["n"] + 1))
+    monkeypatch.setattr("storage.r2.upload_file", lambda local_path, key, content_type=None: upload_called.__setitem__("n", upload_called["n"] + 1))
+    monkeypatch.setattr("storage.r2.object_exists", lambda key: True)  # R2 already has it
 
     local_path = tmp_path / "already_here.json"
     local_path.write_text("original")
     pf.sync_from_r2_if_missing(local_path, "config/thing.json")
 
-    assert was_called["n"] == 0
+    assert download_called["n"] == 0
+    assert upload_called["n"] == 0
     assert local_path.read_text() == "original"
+
+
+def test_sync_from_r2_if_missing_backfills_when_local_exists_but_r2_does_not(tmp_path, monkeypatch):
+    """The gap this fix closes: a file that already existed locally BEFORE
+    R2 was ever enabled (e.g. a Google OAuth token established under
+    STORAGE_BACKEND=local) must get pushed to R2 the first time it's read
+    after switching to r2 — otherwise it would silently never reach R2
+    until it happened to be rewritten, and would be lost on the very next
+    restart despite the file "looking" persisted locally."""
+    import storage.backend as backend
+    import storage.persistent_file as pf
+
+    monkeypatch.setattr(backend, "is_r2_enabled", lambda: True)
+    monkeypatch.setattr("storage.r2.object_exists", lambda key: False)  # R2 doesn't have it yet
+    uploaded = {}
+
+    def fake_upload_file(local_path, key, content_type=None):
+        uploaded["local_path"] = local_path
+        uploaded["key"] = key
+
+    monkeypatch.setattr("storage.r2.upload_file", fake_upload_file)
+
+    local_path = tmp_path / "pre_existing_token.json"
+    local_path.write_text("pre-existing local content")
+    pf.sync_from_r2_if_missing(local_path, "integrations/google_sheets/token.json")
+
+    assert uploaded["key"] == "integrations/google_sheets/token.json"
+    assert uploaded["local_path"] == local_path
+    assert local_path.read_text() == "pre-existing local content"  # untouched locally
