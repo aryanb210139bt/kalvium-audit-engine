@@ -41,8 +41,18 @@ class Settings(BaseSettings):
     diarization_provider: str = "auto"
     hf_token: str = ""   # HuggingFace token for Pyannote
 
-    # Storage
-    upload_dir: Path = Path("/Users/apple/Desktop/demo audit/demo audit without sarvam")
+    # Storage — TEMPORARY processing scratch space only (raw uploads/
+    # downloads, audio chunks). Explicitly cleaned up after every pipeline
+    # run (see api/main.py's _cleanup_upload_dir/_sweep_orphaned_uploads) —
+    # never treated as persistent; on Render this is local disk and that's
+    # fine, since nothing here needs to survive a restart. Persistent
+    # application files (screenshots, the Excel tracker, Google OAuth
+    # state) go through storage/r2.py instead — see STORAGE_BACKEND.
+    #
+    # Default is a portable relative path so this works out of the box on
+    # any machine/container; set UPLOAD_DIR explicitly to override (this
+    # project's own local .env does, for historical reasons).
+    upload_dir: Path = Path("tmp_uploads")
     max_upload_size_mb: int = 1000
 
     # Database backend — "sqlite" (default, current behavior) or "postgres".
