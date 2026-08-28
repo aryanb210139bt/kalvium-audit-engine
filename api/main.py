@@ -676,9 +676,17 @@ async def upload_from_url(req: UrlUploadRequest):
     if not url:
         raise HTTPException(400, "URL is required")
 
+    # validate_url/preflight_drive make real, synchronous HTTP HEAD requests
+    # (the requests library, not httpx/async) — run_in_executor keeps them
+    # off the single asyncio event loop. Without this, one slow/hanging
+    # HEAD check (up to 10-15s each) blocked EVERY other concurrent request
+    # on this server, including the frontend's own /api/v1/queue polling —
+    # that's what surfaced as intermittent 520s from Cloudflare while a
+    # link was being validated.
+    loop = asyncio.get_running_loop()
     try:
-        validate_url(url)         # cheap HEAD check — no download, no AI cost
-        preflight_drive(url)      # catches restricted Drive files before queuing
+        await loop.run_in_executor(_executor, validate_url, url)
+        await loop.run_in_executor(_executor, preflight_drive, url)
     except ValueError as e:
         raise HTTPException(400, str(e))
 
@@ -713,6 +721,7 @@ async def upload_multiple_links(req: MultiLinkRequest):
     batch_id    = str(uuid.uuid4())
     session_ids = []
     errors      = []
+    loop = asyncio.get_running_loop()
 
     for i, item in enumerate(req.links):
         url = item.url.strip()
@@ -720,9 +729,13 @@ async def upload_multiple_links(req: MultiLinkRequest):
             errors.append({"index": i, "error": "Empty URL — skipped"})
             continue
 
+        # See upload_from_url's comment: these are blocking synchronous HTTP
+        # calls, run_in_executor keeps them off the event loop. This loop can
+        # process up to 20 links — without this, a full batch could block
+        # every other concurrent request on the server for minutes.
         try:
-            validate_url(url)         # cheap HEAD check only — no download, no AI cost
-            preflight_drive(url)
+            await loop.run_in_executor(_executor, validate_url, url)
+            await loop.run_in_executor(_executor, preflight_drive, url)
         except ValueError as e:
             errors.append({"index": i, "url": url[:80], "error": str(e)})
             continue
