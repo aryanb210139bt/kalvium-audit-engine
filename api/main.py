@@ -38,7 +38,7 @@ app = FastAPI(title="Kalvium AI Audit Platform", version="4.0.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["https://kalvium-audit-engine.onrender.com"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
