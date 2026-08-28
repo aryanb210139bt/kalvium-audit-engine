@@ -337,7 +337,14 @@ _batches: dict[str, dict] = {}
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
-@app.get("/")
+# Both routes below explicitly accept HEAD as well as GET. Render's deploy
+# health-check probe sends a HEAD request — Starlette does NOT auto-add
+# HEAD support to a plain @app.get(...) route (confirmed empirically: a
+# GET-only route 405s on HEAD), and Render was probing "/" specifically
+# with HEAD and getting exactly that 405, which is why the deploy never
+# went healthy. Declaring both methods here fixes it regardless of which
+# path Render's dashboard is actually configured to check.
+@app.api_route("/", methods=["GET", "HEAD"])
 async def root():
     dashboard = static_dir / "dashboard.html"
     if dashboard.exists():
@@ -345,7 +352,7 @@ async def root():
     return {"message": "Demo Audit API v2 — open /static/dashboard.html"}
 
 
-@app.get("/health")
+@app.api_route("/health", methods=["GET", "HEAD"])
 async def health():
     return {"status": "ok", "timestamp": datetime.utcnow().isoformat(), "sessions": len(_sessions)}
 
