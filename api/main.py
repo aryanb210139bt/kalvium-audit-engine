@@ -214,6 +214,8 @@ async def health_storage(admin: dict = Depends(require_admin)):
 def _add_to_history(session_id: str, sess: dict):
     """Persist a completed/failed session — see session_store.save_session."""
     session_store.save_session(session_id, sess)
+    from reports.associate_analytics import invalidate_dashboard_cache
+    invalidate_dashboard_cache()
     report = sess.get("report") or {}
     score  = report.get("score") or {}
     activity_log.log_event(
@@ -1805,15 +1807,24 @@ async def delete_word_mapping(wrong_word: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/sessions/history")
-async def get_history(limit: int = 100, full: bool = False):
+async def get_history(limit: int = 20, offset: int = 0, search: str = "", full: bool = False):
     """
-    Return list of completed session metadata. full=true (used by the
-    history/dashboard carousel) additionally includes each session's
-    category scores, strengths, and improvement areas — pulled from the
-    stored report_json, one read per session — so the compact card can
-    render inline without a second page load per audit.
+    Return one page of completed session metadata — defaults to 20 per
+    request (never the entire history at once). `search` filters by
+    associate label or session id server-side (same fields the frontend's
+    search box has always searched — this just makes it search the whole
+    history instead of only whatever page was already loaded). `total` is
+    the filtered count, for pagination controls.
+
+    full=true (used by the history/dashboard carousel) additionally
+    includes each session's category scores, strengths, and improvement
+    areas — pulled from the stored report_json via ONE bulk query for the
+    whole page, not one read per session, so the compact card can render
+    inline without a second page load per audit.
     """
-    rows = session_store.list_sessions(limit)
+    limit = max(1, min(limit, 100))  # sane bounds regardless of what a caller passes
+    search = search.strip() or None
+    rows = session_store.list_sessions(limit, offset=offset, search=search)
     sessions = [{
         "session_id":       r["session_id"],
         "date":             r["created_at"],
@@ -1827,25 +1838,37 @@ async def get_history(limit: int = 100, full: bool = False):
     } for r in rows]
 
     if full:
+        reports = session_store.get_reports_bulk([s["session_id"] for s in sessions])
         for s in sessions:
-            report = session_store.get_report(s["session_id"]) or {}
+            report = reports.get(s["session_id"], {})
             score = report.get("score") or {}
             s["category_scores"] = score.get("category_scores") or {}
             s["top_strengths"] = report.get("top_strengths") or []
             s["improvement_areas"] = report.get("improvement_areas") or []
 
-    return {"sessions": sessions, "total": len(sessions)}
+    total = session_store.count(search=search)
+    return {
+        "sessions": sessions,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "has_more": offset + len(sessions) < total,
+    }
 
 
 @app.delete("/api/v1/sessions/history/{session_id}")
 async def delete_history_entry(session_id: str):
     session_store.delete_session(session_id)
+    from reports.associate_analytics import invalidate_dashboard_cache
+    invalidate_dashboard_cache()
     return {"status": "deleted"}
 
 
 @app.delete("/api/v1/sessions/history")
 async def clear_history():
     session_store.clear_sessions()
+    from reports.associate_analytics import invalidate_dashboard_cache
+    invalidate_dashboard_cache()
     return {"status": "cleared"}
 
 

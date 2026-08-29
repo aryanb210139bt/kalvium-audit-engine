@@ -82,6 +82,10 @@ ACTIVITY_LOG = [
     "CREATE INDEX IF NOT EXISTS idx_activity_associate ON activity_log(associate)",
     "CREATE INDEX IF NOT EXISTS idx_activity_event ON activity_log(event_type)",
     "CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_log(timestamp)",
+    # Composite: latest_tracker_lead_owner_by_session() filters on
+    # event_type='pushed_to_tracker' AND sorts by timestamp DESC — the
+    # dashboard calls it on every load. Covers both in one index scan.
+    "CREATE INDEX IF NOT EXISTS idx_activity_event_timestamp ON activity_log(event_type, timestamp)",
 ]
 
 KALVIUM_AUTH = [
@@ -233,6 +237,8 @@ DECK = [
     "CREATE INDEX IF NOT EXISTS idx_criteria_deck ON deck_criteria(deck_id)",
     "CREATE INDEX IF NOT EXISTS idx_coverage_session ON deck_coverage_results(session_id)",
     "CREATE INDEX IF NOT EXISTS idx_paraphrases_criterion ON deck_criteria_paraphrases(criterion_id)",
+    # get_active_deck() filters WHERE status='active' on every call.
+    "CREATE INDEX IF NOT EXISTS idx_deck_schemas_status ON deck_schemas(status)",
 ]
 
 # schema_name -> ordered DDL statements (parent tables before child tables).

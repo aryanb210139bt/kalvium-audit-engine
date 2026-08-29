@@ -118,6 +118,7 @@
       <div id="carousel-track" class="carousel-track"><p class="text-xs text-gray-400 p-3">Loading…</p></div>
       <button class="carousel-arrow right" onclick="scrollCarousel(1)">›</button>
     </div>
+    <div id="history-pagination" class="flex items-center justify-between mt-2" style="font-size:10.5px;color:#9ca3af"></div>
   </section>
 
   <!-- ═══ SECTION 2 — AUDIT DASHBOARD ═══ -->
@@ -199,6 +200,11 @@ function toggleActivityFeed() {
 }
 
 let _allAudits = [];
+const HISTORY_PAGE_SIZE = 20;
+let _historyOffset = 0;
+let _historyTotal = 0;
+let _historySearch = '';
+let _historyLoading = false;
 
 // ── Carousel controls ───────────────────────────────────────────────────
 function scrollCarousel(dir) {
@@ -286,29 +292,67 @@ function renderAuditCard(a) {
 
 function renderAudits() {
   const track = document.getElementById('carousel-track');
-  const q = document.getElementById('search-box').value.trim().toLowerCase();
-  let rows = _allAudits;
-  if (q) rows = rows.filter(a => (a.label||'').toLowerCase().includes(q) || (a.session_id||'').toLowerCase().includes(q));
-  if (!rows.length) { track.innerHTML = '<p class="text-xs text-gray-400 p-3">No audits found.</p>'; return; }
-  track.innerHTML = rows.map(renderAuditCard).join('');
+  if (!_allAudits.length) {
+    track.innerHTML = `<p class="text-xs text-gray-400 p-3">${_historySearch ? 'No audits match your search.' : 'No audits found.'}</p>`;
+  } else {
+    track.innerHTML = _allAudits.map(renderAuditCard).join('');
+  }
+  renderHistoryPagination();
 }
 
+function renderHistoryPagination() {
+  const box = document.getElementById('history-pagination');
+  if (!_historyTotal) { box.innerHTML = ''; return; }
+  const shown = _allAudits.length;
+  const hasMore = _historyOffset + shown < _historyTotal;
+  box.innerHTML = `
+    <span>${shown} of ${_historyTotal} audit${_historyTotal === 1 ? '' : 's'}${_historySearch ? ' matching search' : ''}</span>
+    ${hasMore ? `<a class="footer-link" style="flex:none;padding:4px 10px" onclick="loadMoreAudits();return false;" href="#">Load more</a>` : ''}
+  `;
+}
+
+// Server-side search (was client-side-only before, which meant it could only
+// search whatever page happened to already be loaded — this now searches
+// the entire history, same fields as before: associate label / session id.
 let _searchDebounce = null;
 function debounceSearch() {
   clearTimeout(_searchDebounce);
-  _searchDebounce = setTimeout(renderAudits, 250);
+  _searchDebounce = setTimeout(() => {
+    _historySearch = document.getElementById('search-box').value.trim();
+    loadAudits(true);
+  }, 250);
 }
 
-async function loadAudits() {
+async function loadAudits(reset = true) {
   const track = document.getElementById('carousel-track');
+  if (_historyLoading) return;
+  _historyLoading = true;
+  if (reset) {
+    _historyOffset = 0;
+    _allAudits = [];
+    track.innerHTML = '<p class="text-xs text-gray-400 p-3">Loading…</p>';
+  }
   try {
-    const res = await fetch('/api/v1/sessions/history?limit=60&full=true');
-    const { sessions } = await res.json();
-    _allAudits = sessions || [];
+    const params = new URLSearchParams({
+      limit: HISTORY_PAGE_SIZE, offset: _historyOffset, full: 'true',
+    });
+    if (_historySearch) params.set('search', _historySearch);
+    const res = await fetch(`/api/v1/sessions/history?${params}`);
+    if (!res.ok) throw new Error(await res.text());
+    const data = await res.json();
+    _allAudits = reset ? (data.sessions || []) : _allAudits.concat(data.sessions || []);
+    _historyTotal = data.total || 0;
     renderAudits();
   } catch (e) {
     track.innerHTML = `<p class="text-xs text-red-500 p-3">Could not load audits: ${escapeHtml(String(e))}</p>`;
+  } finally {
+    _historyLoading = false;
   }
+}
+
+function loadMoreAudits() {
+  _historyOffset = _allAudits.length;
+  loadAudits(false);
 }
 
 // ── Dashboard ────────────────────────────────────────────────────────────
@@ -372,17 +416,39 @@ function renderTrend(d) {
     coords.map(([x,y]) => `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="2" fill="var(--k-red)"/>`).join('');
 }
 
+// Each section renders from its own try/catch against the same response,
+// so one section's unexpected data shape can't take the others down with
+// it — a slow/odd trend calculation, say, still leaves KPIs/category
+// performance/strengths visible.
+function _renderDashboardSection(fn, d, fallbackElId, label) {
+  try {
+    fn(d);
+  } catch (e) {
+    const el = document.getElementById(fallbackElId);
+    if (el) el.innerHTML = `<p class="text-xs text-red-500">Could not load ${escapeHtml(label)}.</p>`;
+  }
+}
+
 async function loadDashboard() {
+  const kpiGrid = document.getElementById('kpi-grid');
+  kpiGrid.innerHTML = '<p class="text-xs text-gray-400 col-span-6">Loading…</p>';
+  let d;
   try {
     const res = await fetch('/api/v1/dashboard/overview');
-    const d = await res.json();
-    renderKpis(d);
-    renderCategoryPerformance(d);
-    renderStrengthsImprovements(d);
-    renderTrend(d);
+    if (!res.ok) throw new Error(await res.text());
+    d = await res.json();
   } catch (e) {
-    document.getElementById('kpi-grid').innerHTML = `<p class="text-xs text-red-500 p-3 col-span-6">Could not load dashboard: ${escapeHtml(String(e))}</p>`;
+    kpiGrid.innerHTML = `<p class="text-xs text-red-500 p-3 col-span-6">Could not load dashboard: ${escapeHtml(String(e))}</p>`;
+    document.getElementById('catperf-list').innerHTML = '<p class="text-xs text-red-500">Could not load.</p>';
+    document.getElementById('dash-strengths').innerHTML = '<p class="text-xs text-red-500">Could not load.</p>';
+    document.getElementById('dash-improvements').innerHTML = '<p class="text-xs text-red-500">Could not load.</p>';
+    document.getElementById('trend-comparison').innerHTML = '<span class="text-red-500">Could not load.</span>';
+    return;
   }
+  _renderDashboardSection(renderKpis, d, 'kpi-grid', 'KPIs');
+  _renderDashboardSection(renderCategoryPerformance, d, 'catperf-list', 'category performance');
+  _renderDashboardSection(renderStrengthsImprovements, d, 'dash-strengths', 'strengths/improvements');
+  _renderDashboardSection(renderTrend, d, 'trend-comparison', 'trend');
 }
 
 // ── Raw Activity Feed (secondary, collapsed) ─────────────────────────────

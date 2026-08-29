@@ -64,6 +64,12 @@ def init_db() -> None:
     CREATE INDEX IF NOT EXISTS idx_activity_associate ON activity_log(associate);
     CREATE INDEX IF NOT EXISTS idx_activity_event     ON activity_log(event_type);
     CREATE INDEX IF NOT EXISTS idx_activity_timestamp ON activity_log(timestamp);
+    -- Composite: latest_tracker_lead_owner_by_session() filters on
+    -- event_type='pushed_to_tracker' AND sorts by timestamp DESC — this
+    -- covers both in one index scan (the dashboard calls that function on
+    -- every load) instead of relying on just one of the two single-column
+    -- indexes above.
+    CREATE INDEX IF NOT EXISTS idx_activity_event_timestamp ON activity_log(event_type, timestamp);
     """)
     db.commit()
 

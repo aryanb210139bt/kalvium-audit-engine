@@ -131,6 +131,9 @@ def init_db():
     CREATE INDEX IF NOT EXISTS idx_criteria_deck ON deck_criteria(deck_id);
     CREATE INDEX IF NOT EXISTS idx_coverage_session ON deck_coverage_results(session_id);
     CREATE INDEX IF NOT EXISTS idx_paraphrases_criterion ON deck_criteria_paraphrases(criterion_id);
+    -- get_active_deck() filters WHERE status='active' on every call
+    -- (checkDeckPill() polls it) — no index on status existed before.
+    CREATE INDEX IF NOT EXISTS idx_deck_schemas_status ON deck_schemas(status);
     """)
     db.commit()
 

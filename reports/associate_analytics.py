@@ -16,10 +16,33 @@ for the session list and, for category-level detail, each session's full
 report. Does not touch the audit/evaluation pipeline in any way.
 """
 from __future__ import annotations
+import time
 import activity_log
 import session_store
 
 UNASSIGNED = "Unassigned"
+
+# ── Short-lived cache for the overall dashboard ─────────────────────────────
+# build_overall_dashboard() aggregates across every session — not cheap, and
+# not user-specific (it's the same admin-only rollup for everyone, no
+# per-viewer variation), so a brief in-process cache is safe: it just means
+# a new audit's effect on the dashboard can take up to _DASHBOARD_CACHE_TTL
+# seconds to show up, in exchange for not recomputing it from scratch on
+# every page load/poll. Single-process deployment (confirmed: no --workers/
+# gunicorn anywhere) — a plain module-level dict is enough, no need for a
+# shared/distributed cache.
+_DASHBOARD_CACHE_TTL = 30  # seconds
+_dashboard_cache: dict = {"data": None, "expires_at": 0.0}
+
+
+def invalidate_dashboard_cache() -> None:
+    """Call after anything that changes the audit history (a new session
+    saved, deleted, etc.) if you want the next dashboard load to reflect
+    it immediately rather than waiting out the TTL. Not required for
+    correctness — the cache expires on its own — just avoids the up-to-
+    30s staleness window when it matters."""
+    _dashboard_cache["data"] = None
+    _dashboard_cache["expires_at"] = 0.0
 
 
 def _is_real_label(label: str) -> bool:
@@ -104,10 +127,17 @@ def _category_breakdown_for(session_ids: list[str]) -> dict[str, dict]:
     full report from session_store. Sessions without a report on file
     (shouldn't normally happen post-migration, but be defensive) are
     silently skipped rather than failing — this is a best-effort breakdown.
+
+    Uses get_reports_bulk() — ONE query for every session_id instead of
+    one round trip per session. This used to be the dominant cost of
+    both the dashboard and the history page's full=true response: against
+    remote Postgres, 50+ sequential round trips is exactly what "stuck on
+    Loading" looks like. Same result, just requested together.
     """
+    reports = session_store.get_reports_bulk(session_ids)
     totals: dict[str, list[float]] = {}
     for sid in session_ids:
-        report = session_store.get_report(sid)
+        report = reports.get(sid)
         if not report:
             continue
         cat_scores = (report.get("score") or {}).get("category_scores") or {}
@@ -130,7 +160,20 @@ def build_overall_dashboard() -> dict:
     approach as build_associate_profiles()/get_associate_detail(), just not
     grouped by associate. Purely additive: reads session_store, never
     touches the audit/scoring pipeline.
+
+    Cached for _DASHBOARD_CACHE_TTL seconds — see the cache block above.
     """
+    now = time.monotonic()
+    if _dashboard_cache["data"] is not None and now < _dashboard_cache["expires_at"]:
+        return _dashboard_cache["data"]
+
+    result = _build_overall_dashboard_uncached()
+    _dashboard_cache["data"] = result
+    _dashboard_cache["expires_at"] = now + _DASHBOARD_CACHE_TTL
+    return result
+
+
+def _build_overall_dashboard_uncached() -> dict:
     sessions = _load_sessions()
     scores = [s.get("overall_score") for s in sessions if isinstance(s.get("overall_score"), (int, float))]
     session_ids = [s["session_id"] for s in sessions if s.get("session_id")]

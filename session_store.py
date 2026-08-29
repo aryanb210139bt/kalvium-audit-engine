@@ -123,14 +123,58 @@ def get_report(session_id: str) -> Optional[dict]:
     return json.loads(row["report_json"])
 
 
-def list_sessions(limit: int = 200) -> list[dict]:
+def get_reports_bulk(session_ids: list[str]) -> dict[str, dict]:
+    """Fetch report_json for MULTIPLE sessions in one query instead of one
+    round trip per session — this is what eliminates the N+1 pattern in
+    the history 'full=true' response and in the dashboard's category
+    aggregation (reports/associate_analytics.py), both of which used to
+    call get_report() in a loop. Returns {session_id: parsed_report} for
+    whichever of the given ids actually have a report on file (missing/
+    empty ones are simply absent from the result, not an error)."""
+    if not session_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(session_ids))
+    rows = _conn().execute(
+        f"SELECT session_id, report_json FROM sessions WHERE session_id IN ({placeholders})",
+        session_ids,
+    ).fetchall()
+    result: dict[str, dict] = {}
+    for r in rows:
+        if r["report_json"]:
+            result[r["session_id"]] = json.loads(r["report_json"])
+    return result
+
+
+def _search_clause(search: Optional[str]) -> tuple[str, list]:
+    """Shared WHERE fragment for list_sessions()/count() — matches label
+    (associate name) or session_id, same fields the frontend's search box
+    has always searched, just applied server-side now instead of only
+    within whatever page happened to already be loaded in the browser.
+
+    LOWER(...) on both sides (rather than bare LIKE) deliberately, not for
+    style: SQLite's LIKE is case-insensitive for ASCII by default, but
+    Postgres's is case-SENSITIVE — a bare LIKE here would silently behave
+    differently depending on DB_BACKEND. Wrapping both sides in LOWER()
+    keeps this identical on both, matching the frontend's existing
+    .toLowerCase() search."""
+    if not search:
+        return "", []
+    like = f"%{search.lower()}%"
+    return " WHERE (LOWER(label) LIKE ? OR LOWER(session_id) LIKE ?)", [like, like]
+
+
+def list_sessions(limit: int = 200, offset: int = 0, search: Optional[str] = None) -> list[dict]:
     """Lightweight summaries (no report_json blob) for history lists and
-    associate analytics — newest first."""
-    rows = _conn().execute("""
+    associate analytics — newest first. `search` (associate label or
+    session id, case-sensitive substring match, mirroring the frontend's
+    existing search box) is applied before limit/offset so pagination
+    stays correct while searching."""
+    where, params = _search_clause(search)
+    rows = _conn().execute(f"""
         SELECT session_id, status, label, source_type, source_url, created_at,
                completed_at, duration_seconds, overall_score, grade
-        FROM sessions ORDER BY created_at DESC LIMIT ?
-    """, (limit,)).fetchall()
+        FROM sessions{where} ORDER BY created_at DESC LIMIT ? OFFSET ?
+    """, params + [limit, offset]).fetchall()
     return [dict(r) for r in rows]
 
 
@@ -146,8 +190,12 @@ def clear_sessions() -> None:
     db.commit()
 
 
-def count() -> int:
-    return _conn().execute("SELECT COUNT(*) AS n FROM sessions").fetchone()["n"]
+def count(search: Optional[str] = None) -> int:
+    """Total row count — with the same `search` filter as list_sessions()
+    when provided, so pagination UI shows the correct total while
+    searching (not the unfiltered grand total)."""
+    where, params = _search_clause(search)
+    return _conn().execute(f"SELECT COUNT(*) AS n FROM sessions{where}", params).fetchone()["n"]
 
 
 # ── One-time migration from the old JSON-file store ────────────────────────────
