@@ -326,11 +326,22 @@ def test_auto_fill_ignores_video_analysis_still_in_progress():
 
 def test_shared_download_failure_marks_video_audit_failed_not_stuck_queued(tmp_path, monkeypatch):
     import api.main as main
+    import activity_log
     from progress_tracker import ProgressTracker
 
     monkeypatch.setattr(video_audit_store, "DB_PATH", tmp_path / "test_pipeline_fail.db")
     monkeypatch.setattr(video_audit_store, "_local", threading.local())
     video_audit_store.init_db()
+
+    # This test exercises the real failure path, which also calls
+    # activity_log.log_event() — isolate that too, or every run of this
+    # test writes real rows into data/activity_log.db (harmless-looking
+    # locally, but it's exactly what turned into real Supabase pollution
+    # once DB_BACKEND=postgres was in play; conftest.py's autouse fixture
+    # now prevents the Postgres case, but this keeps local runs clean too).
+    monkeypatch.setattr(activity_log, "DB_PATH", tmp_path / "test_activity_log.db")
+    monkeypatch.setattr(activity_log, "_local", threading.local())
+    activity_log.init_db()
 
     session_id = "sess-download-fail"
     video_audit_id = "va-download-fail"
