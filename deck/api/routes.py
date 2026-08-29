@@ -224,6 +224,26 @@ async def promote_deck(deck_id: str):
     return {"deck_id": deck_id, "old_status": current, "new_status": next_status}
 
 
+# ── Delete deck ───────────────────────────────────────────────────────────────
+
+@router.delete("/{deck_id}")
+async def delete_deck(deck_id: str):
+    """Permanently deletes a deck. Two protections, both required:
+    never leave zero decks (blocks deleting the last one remaining), and
+    never delete the deck currently in use for scoring (status='active',
+    i.e. today's "default" deck) — promote another deck to active first
+    if you want to retire this one."""
+    deck = deck_db.get_deck(deck_id)
+    if not deck:
+        raise HTTPException(404, "Deck not found")
+    if len(deck_db.get_all_decks()) <= 1:
+        raise HTTPException(400, "Cannot delete the last remaining deck")
+    if deck["status"] == "active":
+        raise HTTPException(400, "Cannot delete the active deck — promote another deck to active first")
+    deck_db.delete_deck(deck_id)
+    return {"status": "deleted", "deck_id": deck_id}
+
+
 # ── Update scoring weights ────────────────────────────────────────────────────
 
 @router.patch("/{deck_id}/weights")

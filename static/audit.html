@@ -1804,17 +1804,23 @@ async function loadDeckList() {
       box.innerHTML = '<p class="text-xs text-gray-400">No decks uploaded yet.</p>';
       return;
     }
-    box.innerHTML = decks.map(renderDeckCard).join('');
+    box.innerHTML = decks.map(d => renderDeckCard(d, decks.length)).join('');
   } catch (e) {
     box.innerHTML = `<p class="text-xs text-red-500">Could not load decks: ${escapeHtml(String(e))}</p>`;
   }
 }
 
-function renderDeckCard(d) {
+function renderDeckCard(d, totalDecks) {
   const statusLabel = DECK_STATUS_LABEL[d.status] || d.status;
   const promoteLabel = DECK_PROMOTE_LABEL[d.status];
   const promoteBtn = promoteLabel
     ? `<button class="btn-secondary" style="width:auto;padding:5px 10px" onclick="promoteDeck('${d.deck_id}')">${promoteLabel}</button>`
+    : '';
+  // Never offer delete for the active ("default") deck, or when it's the
+  // only deck left — matches the same two protections the backend enforces.
+  const canDelete = totalDecks > 1 && d.status !== 'active';
+  const deleteBtn = canDelete
+    ? `<button class="btn-secondary" style="width:auto;padding:5px 10px;color:#dc2626" onclick="deleteDeck('${d.deck_id}', '${escapeHtml(d.deck_name).replace(/'/g, "\\'")}')">Delete</button>`
     : '';
   return `
     <div class="deck-card" id="deck-card-${d.deck_id}">
@@ -1826,6 +1832,7 @@ function renderDeckCard(d) {
         <div class="deck-actions">
           <span class="deck-badge ${d.status}">${escapeHtml(statusLabel)}</span>
           ${promoteBtn}
+          ${deleteBtn}
         </div>
       </div>
       <button class="deck-crit-toggle" onclick="toggleDeckCriteria('${d.deck_id}', this)">Show topics ▾</button>
@@ -1842,6 +1849,17 @@ async function promoteDeck(deckId) {
     await loadDeckList();
     checkDeckPill();
   } catch (e) { addLog(`Could not update deck: ${e}`, 'error'); }
+}
+
+async function deleteDeck(deckId, deckName) {
+  if (!confirm(`Delete deck "${deckName}"? This permanently removes its topics and coverage history. This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/v1/decks/${deckId}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error(await res.text());
+    addLog(`Deleted deck "${deckName}"`, 'info');
+    await loadDeckList();
+    checkDeckPill();
+  } catch (e) { addLog(`Could not delete deck: ${e}`, 'error'); }
 }
 
 async function toggleDeckCriteria(deckId, btn) {

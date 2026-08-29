@@ -349,5 +349,29 @@ def link_call_to_deck(session_id: str, deck_id: str):
     db.commit()
 
 
+def delete_deck(deck_id: str) -> None:
+    """Permanently removes a deck and everything that references it —
+    slides, criteria, paraphrases, call links, coverage results, and its
+    edit log. No ON DELETE CASCADE in the schema, so child tables are
+    deleted explicitly, in dependency order.
+
+    Caller is responsible for the "never delete the active/last-remaining
+    deck" business rule (see deck/api/routes.py's DELETE endpoint) — this
+    function only performs the deletion once that's already been decided.
+    """
+    db = _conn()
+    db.execute(
+        "DELETE FROM deck_criteria_paraphrases WHERE criterion_id IN "
+        "(SELECT criterion_id FROM deck_criteria WHERE deck_id=?)", (deck_id,)
+    )
+    db.execute("DELETE FROM deck_coverage_results WHERE deck_id=?", (deck_id,))
+    db.execute("DELETE FROM deck_call_links WHERE deck_id=?", (deck_id,))
+    db.execute("DELETE FROM schema_edit_log WHERE deck_id=?", (deck_id,))
+    db.execute("DELETE FROM deck_criteria WHERE deck_id=?", (deck_id,))
+    db.execute("DELETE FROM deck_slides WHERE deck_id=?", (deck_id,))
+    db.execute("DELETE FROM deck_schemas WHERE deck_id=?", (deck_id,))
+    db.commit()
+
+
 # Initialise on import
 init_db()
