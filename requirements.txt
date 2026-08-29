@@ -27,6 +27,11 @@ openai-whisper>=20231117
 requests>=2.31.0
 httpx>=0.27.0
 
+# Retry logic for the STT cascade (transcription/stt.py) — was installed
+# locally outside of requirements.txt tracking, missing here, which is
+# what broke every real audit on Render ("No module named 'tenacity'")
+tenacity>=8.2.0
+
 # Speaker diarization (optional — needs HF_TOKEN and GPU recommended)
 # pyannote.audio>=3.1.0
 # torch>=2.0.0
@@ -43,6 +48,10 @@ gdown>=5.0
 
 # Report generation
 reportlab>=4.0.0
+
+# Deck (.pptx) ingestion (deck/ingestion/pptx_extractor.py) — same gap as
+# tenacity above, installed locally but missing from this file
+python-pptx>=1.0.0
 
 # Google Sheets export (OAuth + Sheets/Drive API)
 google-auth>=2.29.0
