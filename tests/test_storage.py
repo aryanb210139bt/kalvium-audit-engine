@@ -123,13 +123,12 @@ def test_excel_tracker_key_is_fixed_singleton_path():
 
 
 def test_google_sheets_keys():
-    from reports.google_sheets_manager import (
-        _R2_KEY_CREDENTIALS, _R2_KEY_TOKEN, _R2_KEY_CONFIG, _R2_KEY_PKCE,
-    )
-    assert _R2_KEY_CREDENTIALS == "integrations/google_sheets/credentials.json"
-    assert _R2_KEY_TOKEN == "integrations/google_sheets/token.json"
+    """Google Sheets integration switched from OAuth2 (credentials/token/
+    PKCE files) to a single service-account key — see
+    reports/google_sheets_manager.py."""
+    from reports.google_sheets_manager import _R2_KEY_SERVICE_ACCOUNT, _R2_KEY_CONFIG
+    assert _R2_KEY_SERVICE_ACCOUNT == "integrations/google_sheets/service_account.json"
     assert _R2_KEY_CONFIG == "integrations/google_sheets/config.json"
-    assert _R2_KEY_PKCE == "integrations/google_sheets/oauth_verifier.txt"
 
 
 def test_word_mappings_and_tl_map_keys():

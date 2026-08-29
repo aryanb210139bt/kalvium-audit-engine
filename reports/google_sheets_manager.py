@@ -1,11 +1,20 @@
 """
 reports/google_sheets_manager.py
-Handles Google OAuth2 flow and Sheets API writes.
+Google Sheets/Drive integration via a SERVICE ACCOUNT — not OAuth2 user
+consent.
 
-Files used (all under data/):
-  google_credentials.json  — OAuth client credentials (user uploads from Google Cloud Console)
-  google_token.json        — Access + refresh token (auto-created after first auth)
-  google_config.json       — Sheet ID + tab name chosen by the user
+Why the switch: OAuth2 needed a human to click through a consent screen
+and its access token needed periodic refresh (and could silently expire/
+revoke). A service account is its own Google identity — no interactive
+consent, no per-user token to refresh or lose. You share the target
+spreadsheet (or Drive folder) with the service account's own email
+address once, the same way you'd share a doc with a colleague, and it
+keeps working across every restart with zero re-auth step.
+
+File used (under data/, persisted to R2 — see storage/persistent_file.py):
+  google_service_account.json — the service account key downloaded from
+  Google Cloud Console (IAM & Admin -> Service Accounts -> Keys -> Add
+  key -> JSON). Contains a private key — never log, print, or commit it.
 """
 from __future__ import annotations
 import json
@@ -14,23 +23,19 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
-DATA_DIR          = Path("data")
-CREDENTIALS_PATH  = DATA_DIR / "google_credentials.json"
-TOKEN_PATH        = DATA_DIR / "google_token.json"
-CONFIG_PATH       = DATA_DIR / "google_config.json"
-_PKCE_VERIFIER_PATH = DATA_DIR / "google_oauth_verifier.txt"
+DATA_DIR              = Path("data")
+SERVICE_ACCOUNT_PATH   = DATA_DIR / "google_service_account.json"
+CONFIG_PATH            = DATA_DIR / "google_config.json"
 
-# R2 keys, one per file above — see storage/persistent_file.py. All are
-# no-ops unless STORAGE_BACKEND=r2.
-_R2_KEY_CREDENTIALS = "integrations/google_sheets/credentials.json"
-_R2_KEY_TOKEN       = "integrations/google_sheets/token.json"
-_R2_KEY_CONFIG      = "integrations/google_sheets/config.json"
-_R2_KEY_PKCE        = "integrations/google_sheets/oauth_verifier.txt"
+# R2 keys — see storage/persistent_file.py. No-ops unless STORAGE_BACKEND=r2.
+_R2_KEY_SERVICE_ACCOUNT = "integrations/google_sheets/service_account.json"
+_R2_KEY_CONFIG          = "integrations/google_sheets/config.json"
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     # Read-only file listing (id/name only, not content) — needed so the app
-    # can show you a picker of your spreadsheets in list_spreadsheets().
+    # can show a picker of spreadsheets the service account can see in
+    # list_spreadsheets().
     "https://www.googleapis.com/auth/drive.metadata.readonly",
 ]
 
@@ -55,138 +60,64 @@ def save_config(cfg: dict):
     sync_to_r2(CONFIG_PATH, _R2_KEY_CONFIG, content_type="application/json")
 
 
-def has_credentials() -> bool:
+# ── Service account credential management ───────────────────────────────────
+
+def has_service_account() -> bool:
     from storage.persistent_file import sync_from_r2_if_missing
-    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
-    return CREDENTIALS_PATH.exists()
+    sync_from_r2_if_missing(SERVICE_ACCOUNT_PATH, _R2_KEY_SERVICE_ACCOUNT)
+    return SERVICE_ACCOUNT_PATH.exists()
 
 
-def has_token() -> bool:
-    from storage.persistent_file import sync_from_r2_if_missing
-    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
-    return TOKEN_PATH.exists()
-
-
-# ── OAuth flow ────────────────────────────────────────────────────────────────
-
-def get_auth_url(redirect_uri: str) -> str:
-    """Build the Google OAuth consent URL and return it."""
-    from storage.persistent_file import sync_from_r2_if_missing, sync_to_r2
-    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
-
-    from google_auth_oauthlib.flow import Flow
-    flow = Flow.from_client_secrets_file(str(CREDENTIALS_PATH), scopes=SCOPES)
-    flow.redirect_uri = redirect_uri
-    auth_url, _ = flow.authorization_url(
-        access_type="offline",
-        include_granted_scopes="true",
-        prompt="consent",
-    )
-    # Flow auto-generates a PKCE code_verifier per instance. The callback
-    # request builds a *separate* Flow to exchange the code, so we have to
-    # persist this one's verifier to disk (single-user, single-flow-at-a-time
-    # local app — a file is enough, no session store needed) or the token
-    # exchange fails with "invalid_grant: Missing code verifier".
+def save_service_account(content: bytes) -> None:
+    """Persist an uploaded service-account JSON key (validated by the
+    caller before this is invoked — see api/main.py's upload endpoint)."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
-    _PKCE_VERIFIER_PATH.write_text(flow.code_verifier)
-    sync_to_r2(_PKCE_VERIFIER_PATH, _R2_KEY_PKCE, content_type="text/plain")
-    return auth_url
-
-
-def exchange_code(code: str, redirect_uri: str) -> dict:
-    """Exchange auth code for tokens and persist them. Returns user info."""
-    from google_auth_oauthlib.flow import Flow
-    from googleapiclient.discovery import build
-    from storage.persistent_file import sync_from_r2_if_missing, delete_from_r2
-
-    sync_from_r2_if_missing(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS)
-    sync_from_r2_if_missing(_PKCE_VERIFIER_PATH, _R2_KEY_PKCE)
-
-    code_verifier = None
-    if _PKCE_VERIFIER_PATH.exists():
-        code_verifier = _PKCE_VERIFIER_PATH.read_text().strip()
-        _PKCE_VERIFIER_PATH.unlink()   # one-time use
-        delete_from_r2(_R2_KEY_PKCE)
-
-    flow = Flow.from_client_secrets_file(
-        str(CREDENTIALS_PATH), scopes=SCOPES, code_verifier=code_verifier
-    )
-    flow.redirect_uri = redirect_uri
-    flow.fetch_token(code=code)
-
-    creds = flow.credentials
-    _save_token(creds)
-
-    # Get user email via tokeninfo
-    try:
-        import urllib.request, urllib.parse
-        info_url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?access_token={creds.token}"
-        with urllib.request.urlopen(info_url) as resp:
-            info = json.loads(resp.read())
-        return {"email": info.get("email", ""), "ok": True}
-    except Exception:
-        return {"email": "", "ok": True}
-
-
-def _save_token(creds):
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    TOKEN_PATH.write_text(creds.to_json())
+    SERVICE_ACCOUNT_PATH.write_bytes(content)
     from storage.persistent_file import sync_to_r2
-    sync_to_r2(TOKEN_PATH, _R2_KEY_TOKEN, content_type="application/json")
+    sync_to_r2(SERVICE_ACCOUNT_PATH, _R2_KEY_SERVICE_ACCOUNT, content_type="application/json")
+
+
+def get_service_account_email() -> str:
+    """Returns the service account's own email (client_email from the key
+    file) — this is the address you share a Sheet/Drive file with in
+    Google's sharing dialog. Empty string if not configured or unreadable."""
+    if not has_service_account():
+        return ""
+    try:
+        data = json.loads(SERVICE_ACCOUNT_PATH.read_text())
+        return data.get("client_email", "")
+    except Exception:
+        return ""
 
 
 def get_credentials():
-    """Return valid (auto-refreshed) credentials or None."""
-    from storage.persistent_file import sync_from_r2_if_missing
-    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
-    if not TOKEN_PATH.exists():
+    """Return service-account credentials, or None if not configured. No
+    refresh/expiry handling needed here — the google-auth library renews
+    the short-lived access token from the private key transparently on
+    each API call."""
+    if not has_service_account():
         return None
-    from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request
-    creds = Credentials.from_authorized_user_file(str(TOKEN_PATH), SCOPES)
-    if creds and creds.expired and creds.refresh_token:
-        try:
-            creds.refresh(Request())
-            _save_token(creds)
-        except Exception as e:
-            logger.warning(f"Token refresh failed: {e}")
-            return None
-    return creds if (creds and creds.valid) else None
-
-
-def get_connected_email() -> str:
-    """Return the email stored in the token file, or empty string."""
-    from storage.persistent_file import sync_from_r2_if_missing
-    sync_from_r2_if_missing(TOKEN_PATH, _R2_KEY_TOKEN)
-    if not TOKEN_PATH.exists():
-        return ""
+    from google.oauth2.service_account import Credentials
     try:
-        data = json.loads(TOKEN_PATH.read_text())
-        # token info endpoint
-        import urllib.request
-        access = data.get("token", "")
-        if not access:
-            return ""
-        url = f"https://www.googleapis.com/oauth2/v3/tokeninfo?access_token={access}"
-        with urllib.request.urlopen(url, timeout=4) as resp:
-            info = json.loads(resp.read())
-        return info.get("email", "")
-    except Exception:
-        return ""
+        return Credentials.from_service_account_file(str(SERVICE_ACCOUNT_PATH), scopes=SCOPES)
+    except Exception as e:
+        logger.warning(f"Could not load service account credentials: {e}")
+        return None
 
 
 def disconnect():
-    """Remove stored token and config."""
+    """Remove the stored service account key, locally and from R2."""
     from storage.persistent_file import delete_from_r2
-    if TOKEN_PATH.exists():
-        TOKEN_PATH.unlink()
-    delete_from_r2(_R2_KEY_TOKEN)
+    if SERVICE_ACCOUNT_PATH.exists():
+        SERVICE_ACCOUNT_PATH.unlink()
+    delete_from_r2(_R2_KEY_SERVICE_ACCOUNT)
 
 
-# ── Sheet operations ──────────────────────────────────────────────────────────
+# ── Sheet operations (unchanged — all just consume get_credentials()) ──────────
 
 def list_spreadsheets() -> list[dict]:
-    """List the user's Google Sheets files (name + id)."""
+    """List spreadsheets the service account can see (name + id) — only
+    ones explicitly shared with its email address."""
     creds = get_credentials()
     if not creds:
         return []
@@ -243,7 +174,7 @@ def append_row_to_sheet(row_data: dict) -> dict:
 
     creds = get_credentials()
     if not creds:
-        raise RuntimeError("Not authenticated with Google")
+        raise RuntimeError("Google Sheets is not configured — upload a service account key first")
 
     cfg = get_config()
     sheet_id = cfg.get("sheet_id", "")
@@ -294,7 +225,6 @@ def ensure_header_row(sheet_id: str, tab_name: str):
     """Write the header row if row 1 is empty."""
     from reports.audit_excel_manager import COLUMNS
     from googleapiclient.discovery import build
-    from reports.google_sheets_manager import get_credentials
 
     creds = get_credentials()
     if not creds:

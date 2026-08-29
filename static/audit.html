@@ -1966,24 +1966,19 @@ function renderGoogleModalBody() {
   const body = document.getElementById('google-modal-body');
   if (!googleStatus) { body.innerHTML = '<p class="text-xs text-gray-400">Loading…</p>'; return; }
 
-  if (!googleStatus.has_credentials_file) {
-    body.innerHTML = `
-      <p class="text-xs text-gray-500 mb-3">Step 1 — Upload the OAuth <code>credentials.json</code> from Google Cloud Console
-        (APIs &amp; Services → Credentials → OAuth client, type "Web application", with
-        <span class="mono">${escapeHtml(location.origin)}/api/v1/google/callback</span> as an authorized redirect URI).</p>
-      <input id="gcred-file" type="file" accept="application/json" class="k-input mb-3" />
-      <button class="btn-primary" onclick="uploadGoogleCredentials()">Upload credentials.json</button>`;
-    return;
-  }
   if (!googleStatus.connected) {
     body.innerHTML = `
-      <p class="text-xs text-green-600 mb-1">✅ Credentials uploaded.</p>
-      <p class="text-xs text-gray-500 mb-3">Step 2 — sign in with the Google account that owns the tracker spreadsheet.</p>
-      <button class="btn-primary" onclick="startGoogleAuth()">Connect Google account</button>`;
+      <p class="text-xs text-gray-500 mb-3">Upload a Google Cloud <b>service account</b> key (IAM &amp; Admin →
+        Service Accounts → Keys → Add key → JSON). After uploading, share the tracker spreadsheet with the
+        service account's own email address (shown below once uploaded) the same way you'd share it with a
+        person — no sign-in step needed.</p>
+      <input id="gcred-file" type="file" accept="application/json" class="k-input mb-3" />
+      <button class="btn-primary" onclick="uploadGoogleServiceAccount()">Upload service account key</button>`;
     return;
   }
   body.innerHTML = `
-    <p class="text-xs text-green-600 mb-3">✅ Connected as ${escapeHtml(googleStatus.email || 'a Google account')}.</p>
+    <p class="text-xs text-green-600 mb-1">✅ Service account: ${escapeHtml(googleStatus.email || '(configured)')}</p>
+    <p class="text-xs text-gray-500 mb-3">Make sure this address has been shared (Editor access) on the target spreadsheet.</p>
     <label class="k-field-label">Spreadsheet</label>
     <select id="gsheet-select" class="k-input mb-3"><option>Loading…</option></select>
     <label class="k-field-label">Tab</label>
@@ -1995,35 +1990,19 @@ function renderGoogleModalBody() {
   loadGoogleSheetsList();
 }
 
-async function uploadGoogleCredentials() {
+async function uploadGoogleServiceAccount() {
   const input = document.getElementById('gcred-file');
   const f = input && input.files[0];
-  if (!f) { addLog('Choose a credentials.json file first', 'warn'); return; }
+  if (!f) { addLog('Choose a service account JSON key file first', 'warn'); return; }
   const fd = new FormData();
   fd.append('file', f);
   try {
-    const res = await fetch('/api/v1/google/upload-credentials', { method: 'POST', body: fd });
+    const res = await fetch('/api/v1/google/upload-service-account', { method: 'POST', body: fd });
     if (!res.ok) throw new Error(await res.text());
-    addLog('credentials.json uploaded', 'success');
+    addLog('Service account key uploaded', 'success');
     await checkGoogleStatus();
     renderGoogleModalBody();
   } catch (e) { addLog(`Upload failed: ${e}`, 'error'); }
-}
-
-async function startGoogleAuth() {
-  try {
-    const res = await fetch('/api/v1/google/auth-url');
-    if (!res.ok) throw new Error(await res.text());
-    const { url } = await res.json();
-    window.open(url, 'google-auth', 'width=520,height=640');
-    window.addEventListener('message', function handler(ev) {
-      if (!ev.data || ev.data.type !== 'google_auth') return;
-      window.removeEventListener('message', handler);
-      if (ev.data.ok) addLog(`Connected to Google as ${ev.data.email}`, 'success');
-      else addLog(`Google auth failed: ${ev.data.error}`, 'error');
-      checkGoogleStatus().then(renderGoogleModalBody);
-    });
-  } catch (e) { addLog(`Auth failed: ${e}`, 'error'); }
 }
 
 async function loadGoogleSheetsList() {

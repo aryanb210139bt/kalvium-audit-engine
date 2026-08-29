@@ -260,8 +260,8 @@ def _auto_push_to_tracker(session_id: str, sess: dict) -> None:
         return   # don't attempt Sheets if even the row-building step failed
 
     try:
-        from reports.google_sheets_manager import has_token, append_row_to_sheet
-        if has_token():
+        from reports.google_sheets_manager import has_service_account, append_row_to_sheet
+        if has_service_account():
             result = append_row_to_sheet(row)
             activity_log.log_event(
                 "pushed_to_tracker", session_id=session_id, associate=row.get("Lead Owner", ""),
@@ -2073,31 +2073,18 @@ async def reload_session(session_id: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-# ── GOOGLE SHEETS INTEGRATION ─────────────────────────────────────────────────
+# ── GOOGLE SHEETS INTEGRATION (service account — see reports/google_sheets_manager.py)
 # ═══════════════════════════════════════════════════════════════════════════════
-
-# NOTE: this must exactly match an "Authorized redirect URI" on the OAuth
-# client in Google Cloud Console. The app is normally served on :8002
-# (see CLAUDE.md / start.sh) — override with GOOGLE_REDIRECT_URI in .env
-# if you run on a different host/port.
-_GOOGLE_REDIRECT = os.getenv("GOOGLE_REDIRECT_URI", "http://localhost:8002/api/v1/google/callback")
-
 
 @app.get("/api/v1/google/status")
 async def google_status():
     """Return connection status."""
-    from reports.google_sheets_manager import has_credentials, has_token, get_config
+    from reports.google_sheets_manager import has_service_account, get_service_account_email, get_config
     cfg = get_config()
-    connected = has_token()
-    email = ""
-    if connected:
-        try:
-            from reports.google_sheets_manager import get_connected_email
-            email = get_connected_email()
-        except Exception:
-            pass
+    connected = has_service_account()
+    email = get_service_account_email() if connected else ""
     return {
-        "has_credentials_file": has_credentials(),
+        "has_service_account": connected,
         "connected": connected,
         "email": email,
         "sheet_id":   cfg.get("sheet_id", ""),
@@ -2106,61 +2093,25 @@ async def google_status():
     }
 
 
-@app.post("/api/v1/google/upload-credentials")
-async def upload_google_credentials(file: UploadFile = File(...)):
-    """Accept the credentials.json downloaded from Google Cloud Console."""
+@app.post("/api/v1/google/upload-service-account")
+async def upload_google_service_account(file: UploadFile = File(...)):
+    """Accept a service-account JSON key downloaded from Google Cloud
+    Console (IAM & Admin -> Service Accounts -> Keys -> Add key -> JSON).
+    Never logged/printed — only validated for shape and persisted."""
     import json as _j
     content = await file.read()
     try:
         data = _j.loads(content)
-        # Validate it looks like OAuth credentials
-        web_or_installed = data.get("web") or data.get("installed")
-        if not web_or_installed:
-            raise ValueError("Invalid credentials.json — expected 'web' or 'installed' key")
+        if data.get("type") != "service_account" or not data.get("client_email") or not data.get("private_key"):
+            raise ValueError(
+                "Invalid service account key — expected a JSON file with "
+                "\"type\": \"service_account\", a client_email, and a private_key"
+            )
     except Exception as e:
-        raise HTTPException(400, f"Invalid credentials file: {e}")
-    from reports.google_sheets_manager import CREDENTIALS_PATH, DATA_DIR, _R2_KEY_CREDENTIALS
-    DATA_DIR.mkdir(parents=True, exist_ok=True)
-    CREDENTIALS_PATH.write_bytes(content)
-    from storage.persistent_file import sync_to_r2
-    sync_to_r2(CREDENTIALS_PATH, _R2_KEY_CREDENTIALS, content_type="application/json")
+        raise HTTPException(400, f"Invalid service account file: {e}")
+    from reports.google_sheets_manager import save_service_account
+    save_service_account(content)
     return {"status": "uploaded"}
-
-
-@app.get("/api/v1/google/auth-url")
-async def google_auth_url():
-    """Return the Google OAuth consent page URL."""
-    from reports.google_sheets_manager import has_credentials, get_auth_url
-    if not has_credentials():
-        raise HTTPException(400, "Upload credentials.json first")
-    url = get_auth_url(_GOOGLE_REDIRECT)
-    return {"url": url}
-
-
-@app.get("/api/v1/google/callback", include_in_schema=False)
-async def google_oauth_callback(code: str = "", error: str = ""):
-    """OAuth callback — exchange code, store token, close popup."""
-    if error:
-        html = f"""<html><body><script>
-            window.opener && window.opener.postMessage({{type:'google_auth',ok:false,error:{repr(error)}}}, '*');
-            window.close();
-        </script><p>Auth failed: {error}</p></body></html>"""
-        return Response(content=html, media_type="text/html")
-    try:
-        from reports.google_sheets_manager import exchange_code
-        info = exchange_code(code, _GOOGLE_REDIRECT)
-        email = info.get("email", "")
-        html = f"""<html><body><script>
-            window.opener && window.opener.postMessage({{type:'google_auth',ok:true,email:{repr(email)}}}, '*');
-            window.close();
-        </script><p>Connected as {email}. You can close this window.</p></body></html>"""
-        return Response(content=html, media_type="text/html")
-    except Exception as e:
-        html = f"""<html><body><script>
-            window.opener && window.opener.postMessage({{type:'google_auth',ok:false,error:{repr(str(e))}}}, '*');
-            window.close();
-        </script><p>Error: {e}</p></body></html>"""
-        return Response(content=html, media_type="text/html")
 
 
 @app.post("/api/v1/google/disconnect")
