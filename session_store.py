@@ -63,6 +63,21 @@ def init_db() -> None:
     );
     CREATE INDEX IF NOT EXISTS idx_sessions_label      ON sessions(label);
     CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at);
+    -- Added for the Audit History filter/export feature (history_filters.py):
+    -- completed_at is the "Audit Date" filter + the new default sort column
+    -- (previously unindexed — created_at was the only timestamp index).
+    CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at);
+    -- Functional indexes on the two lead_sheet_json fields actually used as
+    -- exact-match/range filter dimensions (Demo Date range, TL Name IN(...)).
+    -- Lead Stage and Payment Done are NOT indexed here — both are very
+    -- low-cardinality (2 and 2 real distinct values respectively), where a
+    -- btree index gives negligible benefit over a sequential scan at any
+    -- practical table size; Prospect ID/Lead Number are only ever matched
+    -- via substring search (LIKE '%...%'), which a plain btree can't
+    -- accelerate anyway (would need pg_trgm — not introduced: not
+    -- justified at current scale, see history_filters.py).
+    CREATE INDEX IF NOT EXISTS idx_sessions_demo_date ON sessions(json_extract(lead_sheet_json, '$."Demo Date"'));
+    CREATE INDEX IF NOT EXISTS idx_sessions_tl_name   ON sessions(json_extract(lead_sheet_json, '$."TL Name"'));
     """)
     db.commit()
 
@@ -161,6 +176,26 @@ def _search_clause(search: Optional[str]) -> tuple[str, list]:
         return "", []
     like = f"%{search.lower()}%"
     return " WHERE (LOWER(label) LIKE ? OR LOWER(session_id) LIKE ?)", [like, like]
+
+
+def parse_json_field(value):
+    """Normalizes a value read from one of this module's JSON-extraction
+    columns/expressions (category_scores_json, top_strengths_json,
+    improvement_areas_json, or any lead_sheet_json field) across backends:
+    Postgres's ::jsonb cast comes back already parsed as a dict/list/etc
+    (psycopg's jsonb adaptation); SQLite's json_extract() returns a
+    JSON-encoded STRING for objects/arrays. Every caller that reads one of
+    these columns (api/main.py's history endpoint, reports/audit_export.py)
+    should go through this rather than assuming either shape — see
+    _summary_json_exprs()'s docstring for the same point made at the SQL
+    level."""
+    if value is None or isinstance(value, (dict, list)):
+        return value
+    try:
+        import json
+        return json.loads(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _summary_json_exprs() -> str:
@@ -274,6 +309,202 @@ def list_sessions_page(limit: int = 20, cursor: Optional[tuple] = None,
         ).fetchone()["n"]
 
     return result, total
+
+
+def list_sessions_filtered_page(limit: int = 20, cursor: Optional[tuple] = None,
+                                 filters=None, include_summary: bool = True,
+                                 include_total: bool = False) -> tuple[list[dict], Optional[int]]:
+    """
+    The Audit History + Export feature's main query: everything
+    list_sessions_page() does, plus the full filter set from
+    history_filters.HistoryFilters (audit/demo date ranges, associate, TL,
+    lead stage, payment status) — one shared filter-to-SQL translation
+    (history_filters.build_where) also used by list_sessions_matching()
+    (dashboard) and iter_sessions_for_export(), so history/dashboard/export
+    can never see different result sets for the same filters.
+
+    Sort column is whitelisted via filters.sort_column (history_filters.
+    SORTABLE_FIELDS) — never a raw user-supplied column name. Cursor is
+    (sort_value, session_id) matching whatever column is actually being
+    sorted on, same keyset-pagination shape as list_sessions_page().
+
+    filters=None reproduces list_sessions_page()'s own default sort
+    (created_at) for anything that doesn't care about the new filter
+    dimensions; passing a HistoryFilters (even an empty one) switches
+    default sort to completed_at ("Audit Date"), per this feature's spec —
+    a deliberate, disclosed refinement over the previous created_at-based
+    default, not a behavior change to list_sessions_page() itself, which
+    is untouched.
+    """
+    import history_filters as hf
+
+    sort_col = filters.sort_column if filters is not None else "created_at"
+    sort_dir = (filters.sort_order.upper() if filters is not None else "DESC")
+
+    where_sql, params = hf.build_where(filters)
+    conditions = [where_sql] if where_sql else []
+    if cursor is not None:
+        op = "<" if sort_dir == "DESC" else ">"
+        conditions.append(f"({sort_col}, session_id) {op} (?, ?)")
+        params = params + [cursor[0], cursor[1]]
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    summary_cols = _summary_json_exprs() if include_summary else ""
+    page_cols = ("session_id, status, label, source_type, source_url, created_at, "
+                 "completed_at, duration_seconds, overall_score, grade" +
+                 (", report_json" if include_summary else ""))
+
+    sql = f"""
+        WITH page AS (
+            SELECT {page_cols}
+            FROM sessions{where}
+            ORDER BY {sort_col} {sort_dir}, session_id {sort_dir}
+            LIMIT ?
+        )
+        SELECT session_id, status, label, source_type, source_url, created_at,
+               completed_at, duration_seconds, overall_score, grade{summary_cols}
+        FROM page
+    """
+    rows = _conn().execute(sql, params + [limit]).fetchall()
+    result = [dict(r) for r in rows]
+
+    total = None
+    if include_total:
+        where_no_cursor, params_no_cursor = hf.build_where(filters)
+        where_no_cursor_sql = f" WHERE {where_no_cursor}" if where_no_cursor else ""
+        total = _conn().execute(
+            f"SELECT COUNT(*) AS n FROM sessions{where_no_cursor_sql}", params_no_cursor
+        ).fetchone()["n"]
+
+    return result, total
+
+
+def list_sessions_matching(filters=None, include_summary: bool = False) -> list[dict]:
+    """ALL sessions matching filters, no pagination — for dashboard
+    aggregation (dashboard-scale result sets, tens to low thousands of
+    rows, are fine to materialize fully in one query). For export at
+    potentially much larger scale, use iter_sessions_for_export() instead,
+    which batches internally rather than fetching everything at once."""
+    import history_filters as hf
+    where_sql, params = hf.build_where(filters)
+    where = f" WHERE {where_sql}" if where_sql else ""
+    summary_cols = _summary_json_exprs() if include_summary else ""
+    cols = ("session_id, status, label, source_type, source_url, created_at, "
+            "completed_at, duration_seconds, overall_score, grade")
+    sql = f"SELECT {cols}{summary_cols} FROM sessions{where} ORDER BY completed_at DESC, session_id DESC"
+    rows = _conn().execute(sql, params).fetchall()
+    return [dict(r) for r in rows]
+
+
+def count_sessions_matching(filters=None) -> int:
+    """Total matching filters — used by the dashboard/export UI to show
+    'N audits match your filters' without fetching any rows."""
+    import history_filters as hf
+    where_sql, params = hf.build_where(filters)
+    where = f" WHERE {where_sql}" if where_sql else ""
+    return _conn().execute(f"SELECT COUNT(*) AS n FROM sessions{where}", params).fetchone()["n"]
+
+
+def iter_sessions_for_export(filters=None, batch_size: int = 500):
+    """
+    Yields matching sessions in batches (each a list[dict]), for the
+    export feature — never materializes the whole result set in memory at
+    once, so this stays flat whether there are 60 rows or 60,000. Each row
+    includes the full lead_sheet_json (parsed) plus the report summary
+    fields, everything reports/audit_export.py needs to build one export
+    row without any further per-row queries (no N+1 — this is the only
+    query the whole export makes, repeated only as many times as there are
+    batches, each fetching the NEXT batch_size rows via keyset pagination
+    exactly like the history page's "Load more").
+    """
+    cursor = None
+    while True:
+        rows, _ = list_sessions_filtered_page(
+            limit=batch_size, cursor=cursor, filters=filters,
+            include_summary=True, include_total=False,
+        )
+        if not rows:
+            return
+        # Raw lead_sheet_json fetched separately (own IN(...) query) rather
+        # than folded into the main SELECT: keeps list_sessions_filtered_page
+        # (shared with history/dashboard, which never need lead_sheet) from
+        # paying for it, at the cost of one extra small query per batch.
+        ids = [r["session_id"] for r in rows]
+        lead_sheets = _get_lead_sheets_bulk(ids)
+        for r in rows:
+            r["lead_sheet"] = lead_sheets.get(r["session_id"], {})
+            # Normalize the backend-native JSON shape once, here, so
+            # reports/audit_export.py never has to know SQLite's
+            # json_extract() returns a string while Postgres's ::jsonb
+            # cast returns an already-parsed dict/list (see
+            # parse_json_field's docstring).
+            r["category_scores_json"] = parse_json_field(r.get("category_scores_json"))
+            r["top_strengths_json"] = parse_json_field(r.get("top_strengths_json"))
+            r["improvement_areas_json"] = parse_json_field(r.get("improvement_areas_json"))
+        yield rows
+
+        sort_col = filters.sort_column if filters is not None else "created_at"
+        last = rows[-1]
+        cursor = (last[sort_col], last["session_id"])
+        if len(rows) < batch_size:
+            return
+
+
+def _get_lead_sheets_bulk(session_ids: list[str]) -> dict[str, dict]:
+    """One IN(...) query for a whole export batch's lead_sheet_json,
+    parsed — the same bulk-not-N+1 pattern as get_reports_bulk()."""
+    if not session_ids:
+        return {}
+    placeholders = ",".join(["?"] * len(session_ids))
+    rows = _conn().execute(
+        f"SELECT session_id, lead_sheet_json FROM sessions WHERE session_id IN ({placeholders})",
+        session_ids,
+    ).fetchall()
+    result: dict[str, dict] = {}
+    for r in rows:
+        if r["lead_sheet_json"]:
+            try:
+                result[r["session_id"]] = json.loads(r["lead_sheet_json"])
+            except (TypeError, ValueError):
+                result[r["session_id"]] = {}
+        else:
+            result[r["session_id"]] = {}
+    return result
+
+
+def distinct_associates() -> list[str]:
+    """Real, currently-in-use associate names (sessions.label) for the
+    Associate filter dropdown — only names that actually have at least one
+    audit, never the full roster (associate_roster.py is a separate,
+    admin-managed pick-list of everyone who COULD be an associate; this is
+    who actually has audits). Blank/URL-fallback labels excluded, matching
+    reports/associate_analytics.py's _is_real_label()."""
+    # LIKE patterns passed as params, not embedded literally: a raw '%' in
+    # the SQL text itself breaks psycopg's %s-style placeholder parser
+    # (confirmed live — "only '%s', '%b', '%t' are allowed as placeholders").
+    rows = _conn().execute("""
+        SELECT DISTINCT label FROM sessions
+        WHERE label IS NOT NULL AND label != ''
+          AND LOWER(label) NOT LIKE ? AND LOWER(label) NOT LIKE ?
+        ORDER BY label
+    """, ["http://%", "https://%"]).fetchall()
+    return [r["label"] for r in rows]
+
+
+def distinct_lead_sheet_values(field_name: str) -> list[str]:
+    """Distinct, non-blank values of one lead_sheet_json field (e.g.
+    'TL Name', 'Lead Stage') across every session that has one — for
+    filter dropdowns, populated from actual data, never hardcoded.
+    field_name must be one of history_filters.py's own fixed constants;
+    never pass raw request input here (see _lead_field_expr's security note)."""
+    from history_filters import _lead_field_expr
+    expr = _lead_field_expr("lead_sheet_json", field_name)
+    rows = _conn().execute(f"""
+        SELECT DISTINCT {expr} AS v FROM sessions
+        WHERE {expr} IS NOT NULL AND {expr} != ''
+        ORDER BY v
+    """).fetchall()
+    return [r["v"] for r in rows if r["v"]]
 
 
 def list_sessions(limit: int = 200, offset: int = 0, search: Optional[str] = None) -> list[dict]:

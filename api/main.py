@@ -1868,58 +1868,82 @@ async def delete_word_mapping(wrong_word: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 def _parse_json_field(value):
-    """Normalizes session_store.list_sessions_page()'s summary columns
-    across backends: Postgres returns an already-parsed dict/list (jsonb
-    adaptation), SQLite's json_extract() returns a JSON-encoded string for
-    objects/arrays — either way, callers just get a Python dict/list/None."""
-    if value is None or isinstance(value, (dict, list)):
-        return value
-    try:
-        return _json.loads(value)
-    except (TypeError, ValueError):
-        return None
+    """Thin alias — see session_store.parse_json_field's docstring for why
+    this normalization is needed (SQLite vs Postgres return different
+    shapes for the same JSON-extraction columns)."""
+    return session_store.parse_json_field(value)
+
+
+def _history_filters_from_request(
+    search: str = "", audit_date_from: str = "", audit_date_to: str = "",
+    demo_date_from: str = "", demo_date_to: str = "",
+    associate: str = "", tl: str = "", lead_stage: str = "", payment_status: str = "",
+    sort_by: str = "", sort_order: str = "",
+):
+    """Shared param-parsing for /sessions/history, /dashboard/overview, and
+    /sessions/history/export — same query param names, same
+    history_filters.HistoryFilters, so the three endpoints can never
+    disagree about what a given filter combination matches. Multi-select
+    fields (associate/tl/lead_stage) accept a comma-separated string,
+    matching how the frontend sends a multi-select's chosen values."""
+    import history_filters as hf
+    return hf.parse_history_filters(
+        search=search, audit_date_from=audit_date_from, audit_date_to=audit_date_to,
+        demo_date_from=demo_date_from, demo_date_to=demo_date_to,
+        associate=associate, tl=tl, lead_stage=lead_stage, payment_status=payment_status,
+        sort_by=sort_by, sort_order=sort_order,
+    )
 
 
 @app.get("/api/v1/sessions/history")
 async def get_history(limit: int = 20, search: str = "", full: bool = False,
-                       cursor_created_at: str = "", cursor_id: str = "",
+                       cursor_value: str = "", cursor_id: str = "",
+                       audit_date_from: str = "", audit_date_to: str = "",
+                       demo_date_from: str = "", demo_date_to: str = "",
+                       associate: str = "", tl: str = "", lead_stage: str = "",
+                       payment_status: str = "", sort_by: str = "", sort_order: str = "",
                        user: dict = Depends(require_role("viewer"))):
     """
     Return one page of completed session metadata — defaults to 20 per
-    request (never the entire history at once), newest first.
+    request (never the entire history at once). Default sort is Audit Date
+    (completed_at) descending, newest processed first; see sort_by/
+    sort_order (whitelisted via history_filters.SORTABLE_FIELDS — never an
+    arbitrary column name from the request).
 
-    Keyset/cursor pagination, not offset: pass cursor_created_at +
-    cursor_id (both taken straight from the last row of the previous
-    page — the frontend already has them, no opaque token needed) to fetch
-    the next page:
-        WHERE (created_at, session_id) < (:cursor_created_at, :cursor_id)
-        ORDER BY created_at DESC, session_id DESC LIMIT :limit
-    Omit both for the first page. `next_cursor` in the response is exactly
-    what to pass back in for the page after this one.
+    Filters (audit_date_from/to, demo_date_from/to, associate, tl,
+    lead_stage, payment_status) use the exact same semantics as
+    /api/v1/dashboard/overview and /api/v1/sessions/history/export — all
+    three build their SQL from the one shared history_filters.build_where,
+    so "Associate = Abdul" always means the same session set everywhere.
+    See history_filters.py's module docstring for what each filter reads
+    and why (e.g. why "Audit Date" is completed_at, not the Excel
+    Tracker's differently-sourced "Audit date" column).
 
-    `search` filters by associate label or session id server-side (same
-    fields the frontend's search box has always searched). `total` (the
-    filtered count) is only computed on the first page (cursor omitted) —
-    a "Load more" page reuses the total the client already has rather than
-    re-running an identical COUNT every time.
+    Keyset/cursor pagination, not offset: pass cursor_value + cursor_id
+    (both taken straight from the last row of the previous page's
+    next_cursor — the frontend already has them, no opaque token needed)
+    to fetch the next page. Omit both for the first page. `total` (the
+    filtered count) is only computed on the first page — a "Load more"
+    page reuses the total the client already has rather than re-running an
+    identical COUNT every time.
 
     full=true (used by the history/dashboard carousel) additionally
     includes each session's category scores, strengths, and improvement
     areas — extracted directly from the stored report_json via SQL JSON
-    operators in the SAME query as the page fetch (session_store.
-    list_sessions_page), not a second round trip that pulls each session's
-    entire report_json (previously the dominant cost of this endpoint:
-    confirmed via EXPLAIN ANALYZE that the query itself runs in
-    single-digit milliseconds even at production scale — the old
-    get_reports_bulk() call was transferring ~50KB+ per row, almost all of
-    it unused by this page, just to read 3 small fields).
+    operators in the SAME query as the page fetch, not a second round trip
+    that pulls each session's entire report_json.
     """
     limit = max(1, min(limit, 100))  # sane bounds regardless of what a caller passes
-    search = search.strip() or None
-    cursor = (cursor_created_at, cursor_id) if cursor_created_at and cursor_id else None
+    filters = _history_filters_from_request(
+        search=search, audit_date_from=audit_date_from, audit_date_to=audit_date_to,
+        demo_date_from=demo_date_from, demo_date_to=demo_date_to,
+        associate=associate, tl=tl, lead_stage=lead_stage, payment_status=payment_status,
+        sort_by=sort_by, sort_order=sort_order,
+    )
+    cursor = (cursor_value, cursor_id) if cursor_value and cursor_id else None
 
-    rows, total = session_store.list_sessions_page(
-        limit=limit, cursor=cursor, search=search,
+    rows, total = session_store.list_sessions_filtered_page(
+        limit=limit, cursor=cursor, filters=filters,
         include_summary=full, include_total=(cursor is None),
     )
 
@@ -1945,7 +1969,7 @@ async def get_history(limit: int = 20, search: str = "", full: bool = False,
     next_cursor = None
     if rows:
         last = rows[-1]
-        next_cursor = {"created_at": last["created_at"], "session_id": last["session_id"]}
+        next_cursor = {"value": last[filters.sort_column], "session_id": last["session_id"]}
 
     has_more = (len(sessions) < total) if total is not None else (len(sessions) == limit)
 
@@ -1956,6 +1980,68 @@ async def get_history(limit: int = 20, search: str = "", full: bool = False,
         "next_cursor": next_cursor,
         "has_more": has_more,
     }
+
+
+@app.get("/api/v1/sessions/history/filter-options")
+async def get_history_filter_options(user: dict = Depends(require_role("viewer"))):
+    """Distinct, currently-in-use values for the Associate/TL/Lead Stage
+    filter dropdowns — populated from actual data, never hardcoded. Cheap:
+    3 small DISTINCT queries, no report_json involved."""
+    return {
+        "associates":  session_store.distinct_associates(),
+        "tls":         session_store.distinct_lead_sheet_values("TL Name"),
+        "lead_stages": session_store.distinct_lead_sheet_values("Lead Stage"),
+    }
+
+
+@app.get("/api/v1/sessions/history/export")
+async def export_history(format: str = "xlsx",
+                          search: str = "", audit_date_from: str = "", audit_date_to: str = "",
+                          demo_date_from: str = "", demo_date_to: str = "",
+                          associate: str = "", tl: str = "", lead_stage: str = "",
+                          payment_status: str = "", sort_by: str = "", sort_order: str = "",
+                          user: dict = Depends(require_role("viewer"))):
+    """
+    Server-side export of every session matching the given filters (NOT
+    just the currently-displayed page) — same auth as the history/
+    dashboard endpoints (require_role("viewer"): the export contains the
+    same lead/score data those pages show, so it needs the same access
+    level, not a separate unauthenticated route). Same filter params/
+    semantics as /api/v1/sessions/history and /api/v1/dashboard/overview
+    (see _history_filters_from_request / history_filters.py).
+
+    format=xlsx (default) or format=csv. Rows are fetched from Postgres in
+    batches (session_store.iter_sessions_for_export) rather than one bulk
+    fetch, so this stays memory-flat whether 60 or 10,000+ rows match.
+    Deliberately excludes PII the CRM import carries (Email, Phone Number,
+    Mobile Number) — see reports/audit_export.py's module docstring.
+    """
+    if format not in ("xlsx", "csv"):
+        raise HTTPException(400, "format must be 'xlsx' or 'csv'")
+
+    filters = _history_filters_from_request(
+        search=search, audit_date_from=audit_date_from, audit_date_to=audit_date_to,
+        demo_date_from=demo_date_from, demo_date_to=demo_date_to,
+        associate=associate, tl=tl, lead_stage=lead_stage, payment_status=payment_status,
+        sort_by=sort_by, sort_order=sort_order,
+    )
+
+    from reports.audit_export import generate_xlsx, generate_csv
+    try:
+        if format == "xlsx":
+            content, filename = generate_xlsx(filters)
+            media_type = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        else:
+            content, filename = generate_csv(filters)
+            media_type = "text/csv"
+    except Exception:
+        logger.exception("Audit export failed")
+        raise HTTPException(500, "Unable to generate export. Please try again.")
+
+    return Response(
+        content=content, media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @app.delete("/api/v1/sessions/history/{session_id}")
@@ -1979,12 +2065,29 @@ async def clear_history():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/dashboard/overview")
-async def dashboard_overview(user: dict = Depends(require_role("viewer"))):
+async def dashboard_overview(search: str = "", audit_date_from: str = "", audit_date_to: str = "",
+                              demo_date_from: str = "", demo_date_to: str = "",
+                              associate: str = "", tl: str = "", lead_stage: str = "",
+                              payment_status: str = "",
+                              user: dict = Depends(require_role("viewer"))):
     """All-audits rollup for the Audit Dashboard — KPIs, category breakdown,
     strongest/weakest categories, and trend over time. Read-only aggregation
-    over session_store; never touches the audit/scoring pipeline."""
+    over session_store; never touches the audit/scoring pipeline.
+
+    Accepts the SAME filter params as /api/v1/sessions/history and
+    /api/v1/sessions/history/export (see _history_filters_from_request) —
+    "Associate = Abdul" narrows the dashboard to Abdul's audits exactly the
+    same way it narrows the history list, both built from the one shared
+    history_filters.build_where. No filters (the default, everything
+    blank) reproduces the original unfiltered dashboard exactly, including
+    its 30s cache."""
     from reports.associate_analytics import build_overall_dashboard
-    return build_overall_dashboard()
+    filters = _history_filters_from_request(
+        search=search, audit_date_from=audit_date_from, audit_date_to=audit_date_to,
+        demo_date_from=demo_date_from, demo_date_to=demo_date_to,
+        associate=associate, tl=tl, lead_stage=lead_stage, payment_status=payment_status,
+    )
+    return build_overall_dashboard(filters)
 
 
 @app.get("/api/v1/associates")

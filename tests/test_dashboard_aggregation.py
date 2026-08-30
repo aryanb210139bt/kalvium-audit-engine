@@ -15,6 +15,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 import activity_log
 import session_store
+import history_filters as hf
 import reports.associate_analytics as associate_analytics
 
 
@@ -32,7 +33,7 @@ def _fresh_dbs(tmp_path, monkeypatch):
     associate_analytics.invalidate_dashboard_cache()
 
 
-def _mk(session_id, label, created_at, overall, grade, category_scores=None):
+def _mk(session_id, label, created_at, overall, grade, category_scores=None, lead_sheet=None):
     session_store.save_session(session_id, {
         "status": "completed",
         "label": label,
@@ -41,7 +42,7 @@ def _mk(session_id, label, created_at, overall, grade, category_scores=None):
         "created_at": created_at,
         "completed_at": created_at,
         "error": None,
-        "lead_sheet": {},
+        "lead_sheet": lead_sheet or {},
         "report": {
             "score": {"overall": overall, "grade": grade, "category_scores": category_scores or {}},
             "top_strengths": [],
@@ -163,3 +164,76 @@ def test_trend_label_prefers_tracker_lead_owner_over_upload_label(tmp_path, monk
 
     d = associate_analytics.build_overall_dashboard()
     assert d["trend"][0]["label"] == "Priya Sharma"
+
+
+# ── Filtered dashboard (Section 16: "History filtering ≠ Dashboard
+# filtering ≠ Export filtering" must never happen — one shared
+# history_filters.build_where used by all three) ────────────────────────
+
+def test_dashboard_with_associate_filter_only_counts_that_associate(tmp_path, monkeypatch):
+    _fresh_dbs(tmp_path, monkeypatch)
+    _mk("s1", "Abdul", "2026-01-01T00:00:00", 90, "A")
+    _mk("s2", "Abdul", "2026-01-02T00:00:00", 70, "C")
+    _mk("s3", "Kavya", "2026-01-03T00:00:00", 50, "F")
+
+    d = associate_analytics.build_overall_dashboard(hf.parse_history_filters(associate="Abdul"))
+    assert d["total_audits"] == 2
+    assert d["average_score"] == 80.0  # (90+70)/2 — Kavya's 50 excluded
+
+
+def test_dashboard_with_date_filter_narrows_trend(tmp_path, monkeypatch):
+    _fresh_dbs(tmp_path, monkeypatch)
+    _mk("s1", "Abdul", "2026-08-01T00:00:00", 90, "A")
+    _mk("s2", "Abdul", "2026-08-15T00:00:00", 70, "C")
+    _mk("s3", "Abdul", "2026-09-01T00:00:00", 50, "F")
+
+    f = hf.parse_history_filters(audit_date_from="2026-08-01", audit_date_to="2026-08-31")
+    d = associate_analytics.build_overall_dashboard(f)
+    assert d["total_audits"] == 2
+    assert d["average_score"] == 80.0
+
+
+def test_dashboard_with_combined_filters(tmp_path, monkeypatch):
+    _fresh_dbs(tmp_path, monkeypatch)
+    _mk("s1", "Abdul", "2026-08-01T00:00:00", 90, "A", lead_sheet={"TL Name": "Praveen GP"})
+    _mk("s2", "Abdul", "2026-08-15T00:00:00", 70, "C", lead_sheet={"TL Name": "Akshay Mathew"})
+    _mk("s3", "Kavya", "2026-08-20T00:00:00", 50, "F", lead_sheet={"TL Name": "Praveen GP"})
+
+    f = hf.parse_history_filters(associate="Abdul", tl="Praveen GP")
+    d = associate_analytics.build_overall_dashboard(f)
+    assert d["total_audits"] == 1
+    assert d["average_score"] == 90.0
+
+
+def test_dashboard_filters_match_history_filters_exactly(tmp_path, monkeypatch):
+    # The actual point of the shared history_filters module: the dashboard
+    # and the history list must agree on which sessions match a given
+    # filter — count them independently and compare.
+    _fresh_dbs(tmp_path, monkeypatch)
+    _mk("s1", "Abdul", "2026-08-01T00:00:00", 90, "A", lead_sheet={"Lead Stage": "Registered"})
+    _mk("s2", "Abdul", "2026-08-02T00:00:00", 70, "C", lead_sheet={"Lead Stage": "Prospect Lead"})
+    _mk("s3", "Kavya", "2026-08-03T00:00:00", 50, "F", lead_sheet={"Lead Stage": "Registered"})
+
+    f = hf.parse_history_filters(lead_stage="Registered")
+    dashboard_total = associate_analytics.build_overall_dashboard(f)["total_audits"]
+    history_total = session_store.count_sessions_matching(f)
+    assert dashboard_total == history_total == 2
+
+
+def test_dashboard_cache_not_shared_across_different_filters(tmp_path, monkeypatch):
+    # A filtered dashboard must never be served from (or pollute) the
+    # unfiltered dashboard's 30s cache slot.
+    _fresh_dbs(tmp_path, monkeypatch)
+    _mk("s1", "Abdul", "2026-01-01T00:00:00", 90, "A")
+    _mk("s2", "Kavya", "2026-01-02T00:00:00", 50, "F")
+
+    unfiltered = associate_analytics.build_overall_dashboard()
+    assert unfiltered["total_audits"] == 2
+
+    filtered = associate_analytics.build_overall_dashboard(hf.parse_history_filters(associate="Abdul"))
+    assert filtered["total_audits"] == 1
+
+    # Re-fetching unfiltered afterward still returns the cached unfiltered
+    # result, not something contaminated by the filtered call in between.
+    unfiltered_again = associate_analytics.build_overall_dashboard()
+    assert unfiltered_again["total_audits"] == 2

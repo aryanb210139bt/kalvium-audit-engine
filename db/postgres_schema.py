@@ -66,6 +66,13 @@ SESSION_STORE = [
     )""",
     "CREATE INDEX IF NOT EXISTS idx_sessions_label ON sessions(label)",
     "CREATE INDEX IF NOT EXISTS idx_sessions_created_at ON sessions(created_at)",
+    # Added for the Audit History filter/export feature (history_filters.py)
+    # — see session_store.py's init_db() for the matching SQLite versions
+    # and the full reasoning (why Lead Stage/Payment Done/Prospect
+    # ID/Lead Number are deliberately NOT indexed here).
+    "CREATE INDEX IF NOT EXISTS idx_sessions_completed_at ON sessions(completed_at)",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_demo_date ON sessions ((lead_sheet_json::jsonb ->> 'Demo Date'))",
+    "CREATE INDEX IF NOT EXISTS idx_sessions_tl_name ON sessions ((lead_sheet_json::jsonb ->> 'TL Name'))",
 ]
 
 ACTIVITY_LOG = [

@@ -87,6 +87,39 @@
     .kpi-grid { grid-template-columns:repeat(3,1fr); }
     .dash-row2 { grid-template-columns:1fr; }
   }
+
+  /* ── Loading skeletons ────────────────────────────────────────────── */
+  @keyframes skeleton-pulse { 0%,100% { opacity:1; } 50% { opacity:.55; } }
+  .skeleton-card { height:64px; border-radius:8px; background:#f0f1f3; animation:skeleton-pulse 1.4s ease-in-out infinite; }
+  .skeleton-kpi { height:64px; border-radius:8px; background:#f0f1f3; animation:skeleton-pulse 1.4s ease-in-out infinite; }
+
+  /* ── Filter bar ───────────────────────────────────────────────────── */
+  .filter-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin-bottom:8px; }
+  .filter-control { display:flex; flex-direction:column; gap:2px; }
+  .filter-label { font-size:9px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:#9ca3af; }
+  .filter-bar select.k-input, .filter-bar input.k-input { min-width:0; }
+  .filter-date-pair { display:flex; align-items:flex-end; gap:4px; }
+  .filter-date-pair input[type="date"] { width:126px; }
+  .filter-clear-btn { font-size:11px; color:#9ca3af; background:none; border:1px solid #e5e7eb; border-radius:4px; padding:6px 10px; cursor:pointer; transition:all .15s; align-self:flex-end; }
+  .filter-clear-btn:hover { border-color:var(--k-red); color:var(--k-red); }
+  .filter-clear-btn:disabled { opacity:.4; cursor:default; }
+  .filter-clear-btn:disabled:hover { border-color:#e5e7eb; color:#9ca3af; }
+
+  .export-btn { font-size:11px; font-weight:600; color:#fff; background:#111827; border:none; border-radius:5px; padding:6px 14px; cursor:pointer; transition:background .15s; display:inline-flex; align-items:center; gap:5px; }
+  .export-btn:hover { background:var(--k-red); }
+  .export-btn:disabled { opacity:.5; cursor:default; }
+
+  /* ── Export modal ─────────────────────────────────────────────────── */
+  .modal-overlay { position:fixed; inset:0; background:rgba(17,24,39,0.35); display:flex; align-items:center; justify-content:center; z-index:50; }
+  .modal-panel { background:#fff; border-radius:10px; width:380px; max-width:calc(100vw - 32px); padding:20px 22px; box-shadow:0 12px 32px rgba(0,0,0,0.18); }
+  .modal-filter-line { font-size:11px; color:#6b7280; display:flex; justify-content:space-between; gap:8px; padding:3px 0; border-bottom:1px solid #f6f7f8; }
+  .modal-match-count { font-size:13px; font-weight:700; color:#111827; margin:12px 0; }
+  .modal-export-btn { width:100%; text-align:left; display:flex; justify-content:space-between; align-items:center; padding:10px 14px; border:1px solid #e5e7eb; border-radius:6px; background:#fafafa; cursor:pointer; font-size:12.5px; font-weight:600; color:#111827; margin-bottom:8px; transition:all .15s; }
+  .modal-export-btn:hover { border-color:var(--k-red); background:var(--k-red-light); }
+  .modal-export-btn:disabled { opacity:.5; cursor:default; }
+  .modal-status { font-size:11px; color:#9ca3af; margin-top:8px; min-height:14px; }
+  .modal-status.error { color:#dc2626; }
+  .modal-status.success { color:#16a34a; }
 </style>
 </head>
 <body>
@@ -111,15 +144,81 @@
   <section class="mb-7">
     <div class="flex items-center justify-between mb-3">
       <p class="sec-title">Audit History</p>
-      <input id="search-box" type="text" placeholder="Search associate or session ID…" class="k-input" style="width:220px" oninput="debounceSearch()"/>
+      <input id="search-box" type="text" placeholder="Search associate, lead, session ID, prospect ID…" class="k-input" style="width:280px" oninput="debounceSearch()"/>
     </div>
+
+    <div class="filter-bar">
+      <div class="filter-control">
+        <span class="filter-label">Audit Date</span>
+        <div class="filter-date-pair">
+          <input type="date" id="f-audit-from" class="k-input" onchange="onFilterChange()"/>
+          <input type="date" id="f-audit-to" class="k-input" onchange="onFilterChange()"/>
+        </div>
+      </div>
+      <div class="filter-control">
+        <span class="filter-label">Demo Date</span>
+        <div class="filter-date-pair">
+          <input type="date" id="f-demo-from" class="k-input" onchange="onFilterChange()"/>
+          <input type="date" id="f-demo-to" class="k-input" onchange="onFilterChange()"/>
+        </div>
+      </div>
+      <div class="filter-control">
+        <span class="filter-label">Associate</span>
+        <select id="f-associate" class="k-input" style="width:150px" onchange="onFilterChange()">
+          <option value="">All Associates</option>
+        </select>
+      </div>
+      <div class="filter-control">
+        <span class="filter-label">TL</span>
+        <select id="f-tl" class="k-input" style="width:140px" onchange="onFilterChange()">
+          <option value="">All TLs</option>
+        </select>
+      </div>
+      <div class="filter-control">
+        <span class="filter-label">Lead Stage</span>
+        <select id="f-lead-stage" class="k-input" style="width:140px" onchange="onFilterChange()">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div class="filter-control">
+        <span class="filter-label">Payment</span>
+        <select id="f-payment" class="k-input" style="width:110px" onchange="onFilterChange()">
+          <option value="">All</option>
+          <option value="yes">Yes</option>
+          <option value="no">No</option>
+          <option value="unknown">Unknown</option>
+        </select>
+      </div>
+      <button id="f-clear-btn" class="filter-clear-btn" onclick="clearFilters()" disabled>Clear Filters</button>
+    </div>
+
     <div class="carousel-wrap">
       <button class="carousel-arrow left" onclick="scrollCarousel(-1)">‹</button>
       <div id="carousel-track" class="carousel-track"><p class="text-xs text-gray-400 p-3">Loading…</p></div>
       <button class="carousel-arrow right" onclick="scrollCarousel(1)">›</button>
     </div>
-    <div id="history-pagination" class="flex items-center justify-between mt-2" style="font-size:10.5px;color:#9ca3af"></div>
+    <div id="history-pagination" class="flex items-center justify-between mt-2" style="font-size:10.5px;color:#9ca3af">
+      <span id="history-count"></span>
+      <button class="export-btn" onclick="openExportModal()">↓ Export</button>
+    </div>
   </section>
+
+  <!-- ═══ Export modal (hidden by default) ═══ -->
+  <div id="export-modal-overlay" class="modal-overlay hidden" onclick="if(event.target===this) closeExportModal()">
+    <div class="modal-panel">
+      <p class="sec-title mb-3">Export Audit Results</p>
+      <div id="export-filter-summary"></div>
+      <div id="export-match-count" class="modal-match-count"></div>
+      <button id="export-xlsx-btn" class="modal-export-btn" onclick="runExport('xlsx')">
+        <span>📊 Excel (.xlsx)</span><span style="color:#9ca3af">↓</span>
+      </button>
+      <button id="export-csv-btn" class="modal-export-btn" onclick="runExport('csv')">
+        <span>📄 CSV (.csv)</span><span style="color:#9ca3af">↓</span>
+      </button>
+      <div id="export-status" class="modal-status"></div>
+      <button class="filter-clear-btn" style="width:100%;margin-top:6px" onclick="closeExportModal()">Cancel</button>
+    </div>
+  </div>
 
   <!-- ═══ SECTION 2 — AUDIT DASHBOARD ═══ -->
   <section>
@@ -201,11 +300,92 @@ function toggleActivityFeed() {
 
 let _allAudits = [];
 const HISTORY_PAGE_SIZE = 20;
-let _historyCursor = null;    // {created_at, session_id} of the last row loaded — null on the first page
+let _historyCursor = null;    // {value, session_id} of the last row loaded — null on the first page
 let _historyHasMore = false;
 let _historyTotal = 0;
-let _historySearch = '';
 let _historyLoading = false;
+
+// ── Centralized filter state (Section 22's "one source of truth") ───────
+// Every control writes here, then onFilterChange() resets pagination and
+// refetches history + dashboard with the SAME params — never five
+// separate ad-hoc API calls per control.
+const filters = {
+  search: '', auditDateFrom: '', auditDateTo: '', demoDateFrom: '', demoDateTo: '',
+  associate: '', tl: '', leadStage: '', paymentStatus: '',
+};
+
+function hasActiveFilters() {
+  return Object.values(filters).some(v => v);
+}
+
+function buildFilterParams() {
+  const p = new URLSearchParams();
+  if (filters.search)        p.set('search', filters.search);
+  if (filters.auditDateFrom) p.set('audit_date_from', filters.auditDateFrom);
+  if (filters.auditDateTo)   p.set('audit_date_to', filters.auditDateTo);
+  if (filters.demoDateFrom)  p.set('demo_date_from', filters.demoDateFrom);
+  if (filters.demoDateTo)    p.set('demo_date_to', filters.demoDateTo);
+  if (filters.associate)     p.set('associate', filters.associate);
+  if (filters.tl)            p.set('tl', filters.tl);
+  if (filters.leadStage)     p.set('lead_stage', filters.leadStage);
+  if (filters.paymentStatus) p.set('payment_status', filters.paymentStatus);
+  return p;
+}
+
+function readFilterControlsIntoState() {
+  filters.auditDateFrom = document.getElementById('f-audit-from').value;
+  filters.auditDateTo   = document.getElementById('f-audit-to').value;
+  filters.demoDateFrom  = document.getElementById('f-demo-from').value;
+  filters.demoDateTo    = document.getElementById('f-demo-to').value;
+  filters.associate     = document.getElementById('f-associate').value;
+  filters.tl            = document.getElementById('f-tl').value;
+  filters.leadStage     = document.getElementById('f-lead-stage').value;
+  filters.paymentStatus = document.getElementById('f-payment').value;
+}
+
+// Dropdown changes fetch immediately (Section 22); free-text search is
+// debounced separately (debounceSearch, below) but funnels through the
+// same onFilterChange() reset-and-reload path.
+function onFilterChange() {
+  readFilterControlsIntoState();
+  document.getElementById('f-clear-btn').disabled = !hasActiveFilters();
+  loadAudits(true);
+  loadDashboard();
+}
+
+function clearFilters() {
+  Object.keys(filters).forEach(k => filters[k] = '');
+  document.getElementById('search-box').value = '';
+  document.getElementById('f-audit-from').value = '';
+  document.getElementById('f-audit-to').value = '';
+  document.getElementById('f-demo-from').value = '';
+  document.getElementById('f-demo-to').value = '';
+  document.getElementById('f-associate').value = '';
+  document.getElementById('f-tl').value = '';
+  document.getElementById('f-lead-stage').value = '';
+  document.getElementById('f-payment').value = '';
+  document.getElementById('f-clear-btn').disabled = true;
+  loadAudits(true);
+  loadDashboard();
+}
+
+async function loadFilterOptions() {
+  try {
+    const res = await fetch('/api/v1/sessions/history/filter-options');
+    if (!res.ok) return;
+    const { associates, tls, lead_stages } = await res.json();
+    const fill = (id, values) => {
+      const sel = document.getElementById(id);
+      const current = sel.value;
+      sel.innerHTML = sel.options[0].outerHTML + values.map(v =>
+        `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join('');
+      sel.value = current;
+    };
+    fill('f-associate', associates || []);
+    fill('f-tl', tls || []);
+    fill('f-lead-stage', lead_stages || []);
+  } catch (e) { /* dropdowns just stay at "All" — not fatal */ }
+}
 
 // ── Carousel controls ───────────────────────────────────────────────────
 function scrollCarousel(dir) {
@@ -294,7 +474,10 @@ function renderAuditCard(a) {
 function renderAudits() {
   const track = document.getElementById('carousel-track');
   if (!_allAudits.length) {
-    track.innerHTML = `<p class="text-xs text-gray-400 p-3">${_historySearch ? 'No audits match your search.' : 'No audits found.'}</p>`;
+    track.innerHTML = hasActiveFilters()
+      ? `<div class="p-3"><p class="text-xs text-gray-400 mb-2">No audits match your filters.</p>
+           <button class="filter-clear-btn" onclick="clearFilters()">Clear Filters</button></div>`
+      : `<p class="text-xs text-gray-400 p-3">No audits found.</p>`;
   } else {
     track.innerHTML = _allAudits.map(renderAuditCard).join('');
   }
@@ -302,25 +485,31 @@ function renderAudits() {
 }
 
 function renderHistoryPagination() {
-  const box = document.getElementById('history-pagination');
-  if (!_historyTotal) { box.innerHTML = ''; return; }
+  const countSpan = document.getElementById('history-count');
+  if (!_historyTotal) { countSpan.innerHTML = ''; return; }
   const shown = _allAudits.length;
-  box.innerHTML = `
-    <span>${shown} of ${_historyTotal} audit${_historyTotal === 1 ? '' : 's'}${_historySearch ? ' matching search' : ''}</span>
-    ${_historyHasMore ? `<a class="footer-link" style="flex:none;padding:4px 10px" onclick="loadMoreAudits();return false;" href="#">Load more</a>` : ''}
+  const matchingWord = hasActiveFilters() ? 'matching ' : '';
+  countSpan.innerHTML = `
+    ${shown} of ${_historyTotal} ${matchingWord}audit${_historyTotal === 1 ? '' : 's'}
+    ${_historyHasMore ? `<a class="footer-link" style="flex:none;padding:4px 10px;margin-left:8px" onclick="loadMoreAudits();return false;" href="#">Load more</a>` : ''}
   `;
 }
 
-// Server-side search (was client-side-only before, which meant it could only
-// search whatever page happened to already be loaded — this now searches
-// the entire history, same fields as before: associate label / session id.
+// Server-side search (searches the entire history, not just the loaded
+// page): associate label, session id, and — via history_filters.py — the
+// CSV-sourced Prospect ID / Lead Number / Lead Name too. Debounced (300ms,
+// per spec) so fast typing doesn't fire a request per keystroke —
+// dropdown/date filters call onFilterChange() directly instead, since a
+// single click/selection doesn't need debouncing.
 let _searchDebounce = null;
 function debounceSearch() {
   clearTimeout(_searchDebounce);
   _searchDebounce = setTimeout(() => {
-    _historySearch = document.getElementById('search-box').value.trim();
+    filters.search = document.getElementById('search-box').value.trim();
+    document.getElementById('f-clear-btn').disabled = !hasActiveFilters();
     loadAudits(true);
-  }, 250);
+    loadDashboard();
+  }, 300);
 }
 
 async function loadAudits(reset = true) {
@@ -330,20 +519,25 @@ async function loadAudits(reset = true) {
   if (reset) {
     _historyCursor = null;
     _allAudits = [];
-    track.innerHTML = '<p class="text-xs text-gray-400 p-3">Loading…</p>';
+    track.innerHTML = '<div class="p-3 flex flex-col gap-2">' +
+      '<div class="skeleton-card"></div><div class="skeleton-card"></div>' +
+      '<div class="skeleton-card"></div></div>';
   }
   try {
     // Keyset/cursor pagination, not offset: the first page omits the
     // cursor entirely; every page after that passes back exactly the
-    // (created_at, session_id) of the last row the previous page
-    // returned — see GET /api/v1/sessions/history's docstring. `total`
-    // only comes back non-null on the first page (cursor omitted); a
-    // "Load more" page reuses the total already held in _historyTotal
-    // rather than asking the server to recompute an identical COUNT.
-    const params = new URLSearchParams({ limit: HISTORY_PAGE_SIZE, full: 'true' });
-    if (_historySearch) params.set('search', _historySearch);
+    // (value, session_id) of the last row the previous page returned —
+    // see GET /api/v1/sessions/history's docstring. `total` only comes
+    // back non-null on the first page (cursor omitted); a "Load more"
+    // page reuses the total already held in _historyTotal rather than
+    // asking the server to recompute an identical COUNT. Same filter
+    // params as the dashboard/export — buildFilterParams() is the one
+    // place that turns `filters` into query params for all three.
+    const params = buildFilterParams();
+    params.set('limit', HISTORY_PAGE_SIZE);
+    params.set('full', 'true');
     if (!reset && _historyCursor) {
-      params.set('cursor_created_at', _historyCursor.created_at);
+      params.set('cursor_value', _historyCursor.value);
       params.set('cursor_id', _historyCursor.session_id);
     }
     const res = await fetch(`/api/v1/sessions/history?${params}`);
@@ -441,10 +635,13 @@ function _renderDashboardSection(fn, d, fallbackElId, label) {
 
 async function loadDashboard() {
   const kpiGrid = document.getElementById('kpi-grid');
-  kpiGrid.innerHTML = '<p class="text-xs text-gray-400 col-span-6">Loading…</p>';
+  kpiGrid.innerHTML = Array(6).fill('<div class="skeleton-kpi"></div>').join('');
   let d;
   try {
-    const res = await fetch('/api/v1/dashboard/overview');
+    // Same filter params as loadAudits() (buildFilterParams()) — a
+    // filtered history list always shows a dashboard for that SAME
+    // filtered set, never the unfiltered whole-history numbers.
+    const res = await fetch(`/api/v1/dashboard/overview?${buildFilterParams()}`);
     if (!res.ok) throw new Error(await res.text());
     d = await res.json();
   } catch (e) {
@@ -488,6 +685,92 @@ async function loadEvents() {
   }
 }
 
+// ── Export modal ──────────────────────────────────────────────────────
+// Server-side export (Section 9): the browser only ever sends the
+// current filters and receives back a finished file — it never fetches
+// every matching row itself. See GET /api/v1/sessions/history/export.
+let _exportInFlight = false;
+
+function _filterSummaryLine(label, value) {
+  return `<div class="modal-filter-line"><span>${escapeHtml(label)}</span><span style="color:#111827;font-weight:600">${escapeHtml(value)}</span></div>`;
+}
+
+async function openExportModal() {
+  document.getElementById('export-modal-overlay').classList.remove('hidden');
+  document.getElementById('export-status').textContent = '';
+  document.getElementById('export-status').className = 'modal-status';
+
+  const rangeLabel = (from, to) => (!from && !to) ? 'All' : `${from || '…'} – ${to || '…'}`;
+  const summary = document.getElementById('export-filter-summary');
+  summary.innerHTML = [
+    _filterSummaryLine('Audit Date', rangeLabel(filters.auditDateFrom, filters.auditDateTo)),
+    _filterSummaryLine('Demo Date', rangeLabel(filters.demoDateFrom, filters.demoDateTo)),
+    _filterSummaryLine('Associate', filters.associate || 'All'),
+    _filterSummaryLine('TL', filters.tl || 'All'),
+    _filterSummaryLine('Lead Stage', filters.leadStage || 'All'),
+    _filterSummaryLine('Payment', filters.paymentStatus || 'All'),
+    _filterSummaryLine('Search', filters.search || '—'),
+  ].join('');
+
+  const countEl = document.getElementById('export-match-count');
+  countEl.textContent = 'Counting matching audits…';
+  try {
+    // Reuses the same total the history page already computed when
+    // filters are unchanged, but re-fetches (cheap — one indexed COUNT)
+    // in case the modal is reopened after the underlying data changed.
+    const res = await fetch(`/api/v1/sessions/history?${buildFilterParams()}&limit=1`);
+    const data = await res.json();
+    countEl.textContent = `${data.total ?? _historyTotal} audits match these filters.`;
+  } catch (e) {
+    countEl.textContent = `${_historyTotal} audits match these filters.`;
+  }
+}
+
+function closeExportModal() {
+  document.getElementById('export-modal-overlay').classList.add('hidden');
+}
+
+async function runExport(format) {
+  if (_exportInFlight) return;  // disable duplicate clicks
+  _exportInFlight = true;
+  const xlsxBtn = document.getElementById('export-xlsx-btn');
+  const csvBtn = document.getElementById('export-csv-btn');
+  const status = document.getElementById('export-status');
+  xlsxBtn.disabled = true; csvBtn.disabled = true;
+  status.className = 'modal-status';
+  status.textContent = 'Preparing export…';
+
+  try {
+    const params = buildFilterParams();
+    params.set('format', format);
+    const res = await fetch(`/api/v1/sessions/history/export?${params}`);
+    if (!res.ok) {
+      let detail = 'Unable to generate export. Please try again.';
+      try { detail = (await res.json()).detail || detail; } catch (_) {}
+      throw new Error(detail);
+    }
+    const blob = await res.blob();
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="?([^";]+)"?/);
+    const filename = match ? match[1] : `kalvium_audit_export.${format}`;
+
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+
+    status.className = 'modal-status success';
+    status.textContent = 'Export ready.';
+  } catch (e) {
+    status.className = 'modal-status error';
+    status.textContent = String(e.message || e);
+  } finally {
+    xlsxBtn.disabled = false; csvBtn.disabled = false;
+    _exportInFlight = false;
+  }
+}
+
 async function boot() {
   let res;
   try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
@@ -496,6 +779,7 @@ async function boot() {
   if (!['admin', 'viewer'].includes(user.role)) { window.location.href = '/static/dashboard.html'; return; }
   document.getElementById('user-chip').textContent = `${user.name} · ${user.role}`;
   wireCarouselInteractions();
+  loadFilterOptions();
   loadAudits();
   loadDashboard();
 }

@@ -56,11 +56,17 @@ def _is_real_label(label: str) -> bool:
     return True
 
 
-def _load_sessions() -> list[dict]:
+def _load_sessions(filters=None) -> list[dict]:
     """Session summaries from session_store, remapped to the field names
     the rest of this module already expects (date/session_id/label/...) —
-    with the label overridden by the tracker-push Lead Owner where one exists."""
-    rows = session_store.list_sessions(limit=1000)
+    with the label overridden by the tracker-push Lead Owner where one exists.
+
+    `filters` (a history_filters.HistoryFilters, or None for "everything")
+    is the SAME shared filter object the Audit History and Export features
+    use (history_filters.py / session_store.list_sessions_matching) — so
+    "dashboard responds to filters" means literally the same WHERE clause,
+    never a second reimplementation that could drift out of sync."""
+    rows = session_store.list_sessions_matching(filters)
     lead_owners = activity_log.latest_tracker_lead_owner_by_session()
     return [{
         "session_id":       r["session_id"],
@@ -75,11 +81,11 @@ def _grade_bucket(grade: str) -> str:
     return (grade or "").replace("+", "").upper() or "?"
 
 
-def build_associate_profiles() -> list[dict]:
+def build_associate_profiles(filters=None) -> list[dict]:
     """One row per associate, named associates first (most sessions first),
     with anything unlabeled or URL-only grouped into a single 'Unassigned'
     row at the end."""
-    sessions = _load_sessions()
+    sessions = _load_sessions(filters)
     groups: dict[str, list[dict]] = {}
     for s in sessions:
         label = s.get("label", "")
@@ -154,27 +160,41 @@ def _category_breakdown_for(session_ids: list[str]) -> dict[str, dict]:
     }
 
 
-def build_overall_dashboard() -> dict:
+def build_overall_dashboard(filters=None) -> dict:
     """
     All-audits rollup for the Audit Dashboard section — same aggregation
     approach as build_associate_profiles()/get_associate_detail(), just not
     grouped by associate. Purely additive: reads session_store, never
     touches the audit/scoring pipeline.
 
-    Cached for _DASHBOARD_CACHE_TTL seconds — see the cache block above.
+    `filters`: a history_filters.HistoryFilters, or None/empty for the
+    unfiltered rollup — same shared filter object as Audit History/Export
+    (see _load_sessions), so "Associate = Abdul" on the dashboard means the
+    exact same session set as "Associate = Abdul" in the history list.
+
+    Cached for _DASHBOARD_CACHE_TTL seconds, but ONLY the unfiltered call
+    (filters is None or has no active filter) — every distinct filter
+    combination would need its own cache slot otherwise, and a manager
+    exploring different filter combos would mostly see the SAME stale
+    result across different filters if this weren't scoped correctly.
+    Filtered dashboards are cheap enough uncached at this data scale (see
+    session_store.list_sessions_matching — one indexed query, no N+1).
     """
-    now = time.monotonic()
-    if _dashboard_cache["data"] is not None and now < _dashboard_cache["expires_at"]:
-        return _dashboard_cache["data"]
+    filters_active = filters is not None and not filters.is_empty()
+    if not filters_active:
+        now = time.monotonic()
+        if _dashboard_cache["data"] is not None and now < _dashboard_cache["expires_at"]:
+            return _dashboard_cache["data"]
+        result = _build_overall_dashboard_uncached(filters)
+        _dashboard_cache["data"] = result
+        _dashboard_cache["expires_at"] = now + _DASHBOARD_CACHE_TTL
+        return result
 
-    result = _build_overall_dashboard_uncached()
-    _dashboard_cache["data"] = result
-    _dashboard_cache["expires_at"] = now + _DASHBOARD_CACHE_TTL
-    return result
+    return _build_overall_dashboard_uncached(filters)
 
 
-def _build_overall_dashboard_uncached() -> dict:
-    sessions = _load_sessions()
+def _build_overall_dashboard_uncached(filters=None) -> dict:
+    sessions = _load_sessions(filters)
     scores = [s.get("overall_score") for s in sessions if isinstance(s.get("overall_score"), (int, float))]
     session_ids = [s["session_id"] for s in sessions if s.get("session_id")]
 
@@ -212,8 +232,8 @@ def _build_overall_dashboard_uncached() -> dict:
     }
 
 
-def get_associate_detail(name: str) -> dict | None:
-    match = next((p for p in build_associate_profiles() if p["associate"] == name), None)
+def get_associate_detail(name: str, filters=None) -> dict | None:
+    match = next((p for p in build_associate_profiles(filters) if p["associate"] == name), None)
     if not match:
         return None
     session_ids = [t["session_id"] for t in match["trend"] if t.get("session_id")]
