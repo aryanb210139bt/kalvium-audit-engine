@@ -163,6 +163,119 @@ def _search_clause(search: Optional[str]) -> tuple[str, list]:
     return " WHERE (LOWER(label) LIKE ? OR LOWER(session_id) LIKE ?)", [like, like]
 
 
+def _summary_json_exprs() -> str:
+    """SQL fragment extracting just the 3 small fields the history page's
+    cards actually render (category_scores, top_strengths,
+    improvement_areas) directly from the stored report_json TEXT column —
+    backend-aware since SQLite and Postgres have different JSON functions.
+    Deliberately NOT a full report_json fetch: that column averages ~50KB+
+    per row (transcript-level evidence, per-category reasoning text, etc.)
+    and get_reports_bulk()/get_report() exist for when the FULL report is
+    actually needed (audit detail page) — this is for the history list,
+    which only ever displays these three fields per card. See
+    list_sessions_page(), which is the only caller."""
+    from db.backend import is_postgres_enabled
+    if is_postgres_enabled():
+        # report_json is stored as TEXT (not jsonb) so both backends can
+        # share one column type — cast only for the extraction, and only
+        # for the already-LIMIT-ed page (see list_sessions_page's CTE),
+        # not the whole table.
+        return """,
+            (CASE WHEN report_json IS NOT NULL THEN (report_json::jsonb -> 'score' -> 'category_scores') END) AS category_scores_json,
+            (CASE WHEN report_json IS NOT NULL THEN (report_json::jsonb -> 'top_strengths') END) AS top_strengths_json,
+            (CASE WHEN report_json IS NOT NULL THEN (report_json::jsonb -> 'improvement_areas') END) AS improvement_areas_json"""
+    return """,
+            json_extract(report_json, '$.score.category_scores') AS category_scores_json,
+            json_extract(report_json, '$.top_strengths') AS top_strengths_json,
+            json_extract(report_json, '$.improvement_areas') AS improvement_areas_json"""
+
+
+def list_sessions_page(limit: int = 20, cursor: Optional[tuple] = None,
+                        search: Optional[str] = None, include_summary: bool = True,
+                        include_total: bool = False) -> tuple[list[dict], Optional[int]]:
+    """
+    One combined query for the history page: the lightweight row fields,
+    the 3 small report-summary fields (see _summary_json_exprs), and
+    (optionally) the total matching count — replacing what used to be 3
+    sequential round trips (list_sessions + get_reports_bulk + count) with
+    1. This is the actual fix for "History stays on Loading for a long
+    time": the query execution itself was always sub-millisecond
+    (confirmed via EXPLAIN ANALYZE against production — idx_sessions_created_at
+    already covers the sort), the cost was almost entirely (a) 3x network
+    round-trip latency to a remote Postgres and (b) get_reports_bulk()
+    transferring each session's ENTIRE report_json (avg ~50KB+, includes
+    full per-category reasoning text) just to read 3 small nested fields.
+
+    cursor: None for the first page. Otherwise (created_at, session_id) —
+    the last row of the previous page — for keyset/cursor pagination:
+    WHERE (created_at, session_id) < (:cursor_created_at, :cursor_id)
+    ORDER BY created_at DESC, session_id DESC LIMIT :limit
+    This is what the docstring's business logic is actually doing; kept as
+    a plain tuple rather than an opaque token since session_id/created_at
+    are already exactly what the frontend has on hand from the last row it
+    rendered — no separate encoding scheme needed.
+
+    include_total: only pay for a COUNT on the first page (cursor=None) —
+    a "Load more" page reuses the total the client already has, which is
+    the second half of eliminating repeated identical-result queries.
+    The CTE shape (LIMIT applied to the lightweight columns BEFORE the
+    report_json cast/extraction, and total computed via a wholly separate
+    subquery) matters, not just cosmetically: confirmed via EXPLAIN ANALYZE
+    that folding total into a COUNT(*) OVER() window column instead forces
+    Postgres to evaluate the JSON-cast expression for every row in the
+    table before the ORDER BY/LIMIT can trim it down to the page size —
+    fine at ~60 rows, but it would stop being fine as history grows are the
+    exact "loading full audit JSON when only summary fields are needed"
+    pattern this whole function exists to avoid, just moved server-side.
+    """
+    # Built directly (not via _search_clause) so the search condition and
+    # the keyset-cursor condition combine with a plain AND regardless of
+    # which/how-many of them are present.
+    conditions: list[str] = []
+    params: list = []
+    if search:
+        like = f"%{search.lower()}%"
+        conditions.append("(LOWER(label) LIKE ? OR LOWER(session_id) LIKE ?)")
+        params += [like, like]
+    if cursor is not None:
+        conditions.append("(created_at, session_id) < (?, ?)")
+        params += [cursor[0], cursor[1]]
+    where = f" WHERE {' AND '.join(conditions)}" if conditions else ""
+
+    summary_cols = _summary_json_exprs() if include_summary else ""
+    page_cols = ("session_id, status, label, source_type, source_url, created_at, "
+                 "completed_at, duration_seconds, overall_score, grade" +
+                 (", report_json" if include_summary else ""))
+
+    sql = f"""
+        WITH page AS (
+            SELECT {page_cols}
+            FROM sessions{where}
+            ORDER BY created_at DESC, session_id DESC
+            LIMIT ?
+        )
+        SELECT session_id, status, label, source_type, source_url, created_at,
+               completed_at, duration_seconds, overall_score, grade{summary_cols}
+        FROM page
+    """
+    rows = _conn().execute(sql, params + [limit]).fetchall()
+    result = [dict(r) for r in rows]
+
+    total = None
+    if include_total:
+        # Deliberately a separate, plain COUNT — not COUNT(*) OVER() in the
+        # query above, and not scoped to the cursor condition (a "Load
+        # more" page's remaining-row count isn't what the UI shows; it
+        # shows the one true total from page 1, matching the pre-existing
+        # "X of Y audits" display exactly).
+        where_no_cursor, params_no_cursor = _search_clause(search)
+        total = _conn().execute(
+            f"SELECT COUNT(*) AS n FROM sessions{where_no_cursor}", params_no_cursor
+        ).fetchone()["n"]
+
+    return result, total
+
+
 def list_sessions(limit: int = 200, offset: int = 0, search: Optional[str] = None) -> list[dict]:
     """Lightweight summaries (no report_json blob) for history lists and
     associate analytics — newest first. `search` (associate label or

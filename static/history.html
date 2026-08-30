@@ -201,7 +201,8 @@ function toggleActivityFeed() {
 
 let _allAudits = [];
 const HISTORY_PAGE_SIZE = 20;
-let _historyOffset = 0;
+let _historyCursor = null;    // {created_at, session_id} of the last row loaded — null on the first page
+let _historyHasMore = false;
 let _historyTotal = 0;
 let _historySearch = '';
 let _historyLoading = false;
@@ -304,10 +305,9 @@ function renderHistoryPagination() {
   const box = document.getElementById('history-pagination');
   if (!_historyTotal) { box.innerHTML = ''; return; }
   const shown = _allAudits.length;
-  const hasMore = _historyOffset + shown < _historyTotal;
   box.innerHTML = `
     <span>${shown} of ${_historyTotal} audit${_historyTotal === 1 ? '' : 's'}${_historySearch ? ' matching search' : ''}</span>
-    ${hasMore ? `<a class="footer-link" style="flex:none;padding:4px 10px" onclick="loadMoreAudits();return false;" href="#">Load more</a>` : ''}
+    ${_historyHasMore ? `<a class="footer-link" style="flex:none;padding:4px 10px" onclick="loadMoreAudits();return false;" href="#">Load more</a>` : ''}
   `;
 }
 
@@ -328,20 +328,31 @@ async function loadAudits(reset = true) {
   if (_historyLoading) return;
   _historyLoading = true;
   if (reset) {
-    _historyOffset = 0;
+    _historyCursor = null;
     _allAudits = [];
     track.innerHTML = '<p class="text-xs text-gray-400 p-3">Loading…</p>';
   }
   try {
-    const params = new URLSearchParams({
-      limit: HISTORY_PAGE_SIZE, offset: _historyOffset, full: 'true',
-    });
+    // Keyset/cursor pagination, not offset: the first page omits the
+    // cursor entirely; every page after that passes back exactly the
+    // (created_at, session_id) of the last row the previous page
+    // returned — see GET /api/v1/sessions/history's docstring. `total`
+    // only comes back non-null on the first page (cursor omitted); a
+    // "Load more" page reuses the total already held in _historyTotal
+    // rather than asking the server to recompute an identical COUNT.
+    const params = new URLSearchParams({ limit: HISTORY_PAGE_SIZE, full: 'true' });
     if (_historySearch) params.set('search', _historySearch);
+    if (!reset && _historyCursor) {
+      params.set('cursor_created_at', _historyCursor.created_at);
+      params.set('cursor_id', _historyCursor.session_id);
+    }
     const res = await fetch(`/api/v1/sessions/history?${params}`);
     if (!res.ok) throw new Error(await res.text());
     const data = await res.json();
     _allAudits = reset ? (data.sessions || []) : _allAudits.concat(data.sessions || []);
-    _historyTotal = data.total || 0;
+    if (data.total != null) _historyTotal = data.total;
+    _historyHasMore = !!data.has_more;
+    _historyCursor = data.next_cursor || null;
     renderAudits();
   } catch (e) {
     track.innerHTML = `<p class="text-xs text-red-500 p-3">Could not load audits: ${escapeHtml(String(e))}</p>`;
@@ -351,7 +362,6 @@ async function loadAudits(reset = true) {
 }
 
 function loadMoreAudits() {
-  _historyOffset = _allAudits.length;
   loadAudits(false);
 }
 
