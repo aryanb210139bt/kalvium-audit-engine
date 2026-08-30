@@ -876,6 +876,31 @@ function watchProcessingJob(jobId) {
   connectWebSocket(jobId);
   document.getElementById('upload-status').classList.remove('hidden');
   document.getElementById('upload-status').textContent = `Watching ${jobId.slice(0,8)}…`;
+  checkForVideoAudit(jobId);
+}
+
+// Was previously never called from anywhere — pollVideoAudit() only ever
+// re-scheduled itself, so a job started with "Also analyze video" checked
+// would finish its screenshot analysis on the backend (confirmed working —
+// see video_audit_store) but the frontend never fetched or rendered it,
+// leaving the Video Snapshot section permanently hidden. This kicks the
+// polling loop off for real. video_audit_store.create() runs synchronously
+// as part of starting the job — before the HTTP response for Start Audit
+// even returns — so it should already exist by the time we ask; the one
+// short retry covers the rare case this runs slightly ahead of that.
+async function checkForVideoAudit(jobId, _retried = false) {
+  try {
+    const res = await fetch(`/api/v1/video-audit/by-session/${jobId}`);
+    if (!res.ok) return;
+    const { video_audit } = await res.json();
+    if (video_audit) {
+      pollVideoAudit(video_audit.id);
+    } else if (!_retried) {
+      setTimeout(() => checkForVideoAudit(jobId, true), 1500);
+    }
+  } catch (err) {
+    // network hiccup — the WS/session watch itself is unaffected
+  }
 }
 
 async function startQueuedJob(jobId) {
@@ -1312,6 +1337,7 @@ function openBatchSession(sid) {
   fetch(`/api/v1/audit/${sid}`).then(r => r.json()).then(data => {
     if (data.score) renderResults(data);
   }).catch(() => {});
+  checkForVideoAudit(sid);
 }
 
 async function fetchParticipantIntelligence(sid, attempt) {
@@ -2348,6 +2374,8 @@ function resetUI() {
   document.getElementById('composite-box').classList.add('hidden');
   document.getElementById('download-box').classList.add('hidden');
   document.getElementById('participant-box').classList.add('hidden');
+  document.getElementById('video-audit-box').classList.add('hidden');
+  document.getElementById('video-audit-content').innerHTML = '';
   document.getElementById('pi-flags').classList.add('hidden');
   document.getElementById('pi-narrative').style.display = 'none';
   document.getElementById('pi-bars').innerHTML = '';
