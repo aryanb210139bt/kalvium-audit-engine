@@ -2378,6 +2378,7 @@ function escapeHtml(s) {
   try { res = await fetch('/api/v1/auth/me'); } catch (e) { res = { ok: false }; }
   if (!res.ok) { window.location.href = '/static/login.html'; return; }
   CURRENT_USER = await res.json();
+  if (!['admin', 'uploader'].includes(CURRENT_USER.role)) { window.location.href = '/static/dashboard.html'; return; }
   bootApp();
 })();
 </script>

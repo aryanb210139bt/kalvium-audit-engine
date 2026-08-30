@@ -112,6 +112,20 @@ async function boot() {
     document.getElementById('mods-admin').innerHTML = [
       modCard({icon:'🔐', name:'Manage Users', desc:'Grant access — create accounts, assign roles.', href:'/static/manage-users.html'}),
     ].join('');
+  } else if (CURRENT_USER.role === 'uploader') {
+    document.getElementById('hero-sub').textContent = 'Upload a recording and run the full AI audit.';
+    primary.innerHTML = [
+      modCard({icon:'🎙️', name:'New Audit', desc:'Upload a recording and run the full AI audit.', href:'/static/audit.html'}),
+      modCard({icon:'💡', name:'Kalvium Intelligence', desc:'AI-generated tips for a better pitch.', soon:true}),
+      modCard({icon:'🤖', name:'Kalvium GPT', desc:'Ask sales questions, answered from a Kalvium-trained perspective.', soon:true}),
+    ].join('');
+  } else if (CURRENT_USER.role === 'viewer') {
+    document.getElementById('hero-sub').textContent = 'Every associate\'s audit history and performance, at a glance.';
+    primary.innerHTML = [
+      modCard({icon:'🕓', name:'Audit History', desc:'Every upload, download, and tracker push — full activity trail.', href:'/static/history.html'}),
+      modCard({icon:'💡', name:'Kalvium Intelligence', desc:'AI-generated tips for a better pitch, drawn from your audit history.', soon:true}),
+      modCard({icon:'🤖', name:'Kalvium GPT', desc:'Ask sales questions, answered from a Kalvium-trained perspective.', soon:true}),
+    ].join('');
   } else {
     document.getElementById('hero-sub').textContent = 'Your audits, scores, and coaching in one place.';
     primary.innerHTML = [

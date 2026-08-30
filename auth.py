@@ -7,9 +7,19 @@ Real per-person accounts, replacing the old shared hardcoded login.
 - Sessions: opaque random token in an HttpOnly cookie, looked up against a
   server-side table. Matches the "one server, small team" hosting model —
   no need for stateless JWTs across multiple server instances.
-- Roles: "admin" (sees everything, manages users/decks/tracker) and
-  "associate" (sees only their own audits — matched via associate_name
-  against the same "Lead Owner" field used elsewhere in the app).
+- Roles:
+    "admin"     — sees and manages everything (upload, full history/
+                  dashboard, associate performance, manage users).
+    "associate" — sees only their own audits (matched via associate_name
+                  against the same "Lead Owner" field used elsewhere).
+    "uploader"  — can only run new audits (upload); no history/dashboard,
+                  no manage users.
+    "viewer"    — read-only access to the full Audit History & Dashboard
+                  (every associate, not just their own); cannot upload or
+                  manage users.
+  Enforced both in the frontend (page redirects) AND server-side (see
+  require_role() in api/main.py) — a role that can't see a page also
+  can't call the API behind it directly.
 - Accounts are admin-granted only — there is no self-signup endpoint.
 
 On first run, seeds one admin account matching the previous shared login
@@ -32,6 +42,8 @@ DB_PATH.parent.mkdir(parents=True, exist_ok=True)
 SESSION_COOKIE   = "kda_session"
 SESSION_TTL_DAYS = 14
 PBKDF2_ITERS     = 200_000
+
+VALID_ROLES = {"admin", "associate", "uploader", "viewer"}
 
 _local = threading.local()
 
@@ -70,7 +82,7 @@ def init_db() -> None:
         name            TEXT NOT NULL,
         password_hash   TEXT NOT NULL,
         password_salt   TEXT NOT NULL,
-        role            TEXT NOT NULL DEFAULT 'associate',   -- admin | associate
+        role            TEXT NOT NULL DEFAULT 'associate',   -- admin | associate | uploader | viewer
         associate_name  TEXT DEFAULT '',                      -- links to session "Lead Owner" for scoping
         status          TEXT NOT NULL DEFAULT 'active',       -- active | disabled
         created_at      TEXT NOT NULL,
@@ -114,8 +126,8 @@ def _verify_password(password: str, digest: str, salt: str) -> bool:
 
 def create_user(email: str, name: str, password: str, role: str = "associate",
                  associate_name: str = "") -> dict:
-    if role not in ("admin", "associate"):
-        raise ValueError("role must be 'admin' or 'associate'")
+    if role not in VALID_ROLES:
+        raise ValueError(f"role must be one of {sorted(VALID_ROLES)}")
     email = email.strip().lower()
     digest, salt = _hash_password(password)
     user_id = str(uuid.uuid4())

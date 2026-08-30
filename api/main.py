@@ -181,6 +181,21 @@ def require_admin(user: dict = Depends(get_current_user)) -> dict:
     return user
 
 
+def require_role(*roles: str):
+    """Server-side enforcement matching each page's client-side redirect —
+    e.g. history.html/dashboard.html redirect a non-viewer away from the
+    History page, but that's just UX; without this, the API underneath it
+    was callable directly (by URL/curl/devtools) by anyone with ANY valid
+    session, or previously even with no session at all for the upload
+    endpoints. 'admin' is implicitly allowed everywhere on top of whatever
+    roles are passed — admins are never excluded from a page/endpoint."""
+    def _check(user: dict = Depends(get_current_user)) -> dict:
+        if user["role"] != "admin" and user["role"] not in roles:
+            raise HTTPException(403, f"Requires one of roles: admin, {', '.join(roles)}")
+        return user
+    return _check
+
+
 @app.get("/api/v1/health/db")
 async def health_db(admin: dict = Depends(require_admin)):
     """Admin-only. Reports which database backend is active and whether it's
@@ -433,8 +448,8 @@ async def admin_create_user(req: CreateUserRequest, admin: dict = Depends(requir
 async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = Depends(require_admin)):
     if not auth.get_user(user_id):
         raise HTTPException(404, "User not found")
-    if req.role and req.role not in ("admin", "associate"):
-        raise HTTPException(400, "role must be 'admin' or 'associate'")
+    if req.role and req.role not in auth.VALID_ROLES:
+        raise HTTPException(400, f"role must be one of {sorted(auth.VALID_ROLES)}")
     if req.status and req.status not in ("active", "disabled"):
         raise HTTPException(400, "status must be 'active' or 'disabled'")
     auth.update_user(user_id, name=req.name, role=req.role,
@@ -639,7 +654,8 @@ async def cancel_processing_job(job_id: str, actor: str = ""):
 
 
 @app.post("/api/v1/audit/upload", response_model=SessionStatus)
-async def upload_recording(file: UploadFile = File(...), actor: str = Form("")):
+async def upload_recording(file: UploadFile = File(...), actor: str = Form(""),
+                            user: dict = Depends(require_role("uploader"))):
     ext = Path(file.filename or "").suffix.lower()
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(400, f"Unsupported type '{ext}'")
@@ -667,7 +683,7 @@ async def upload_recording(file: UploadFile = File(...), actor: str = Form("")):
 
 
 @app.post("/api/v1/audit/upload-url", response_model=SessionStatus)
-async def upload_from_url(req: UrlUploadRequest):
+async def upload_from_url(req: UrlUploadRequest, user: dict = Depends(require_role("uploader"))):
     """
     Download a recording from a URL and run the audit pipeline.
     Supports: Google Drive, Loom, any direct .mp4/.mp3/.wav/.m4a/.webm link.
@@ -707,7 +723,7 @@ async def upload_from_url(req: UrlUploadRequest):
 
 
 @app.post("/api/v1/audit/upload-links")
-async def upload_multiple_links(req: MultiLinkRequest):
+async def upload_multiple_links(req: MultiLinkRequest, user: dict = Depends(require_role("uploader"))):
     """
     Submit 1–20 Google Drive / Loom / direct links in a single call.
     Each link becomes its own session processed sequentially in the background.
@@ -772,7 +788,8 @@ async def upload_multiple_links(req: MultiLinkRequest):
 
 
 @app.post("/api/v1/audit/upload-transcript", response_model=SessionStatus)
-async def upload_transcript(file: UploadFile = File(...), actor: str = Form("")):
+async def upload_transcript(file: UploadFile = File(...), actor: str = Form(""),
+                             user: dict = Depends(require_role("uploader"))):
     """
     Accept a .txt transcript file and run the full audit pipeline,
     skipping STT entirely — goes straight to GPT evaluation + deck coverage.
@@ -812,7 +829,8 @@ VIDEO_ANALYSIS_BATCH_CAP = 20  # safety cap: analyze_video does a full video
 
 @app.post("/api/v1/audit/upload-csv")
 async def upload_csv_batch(file: UploadFile = File(...), actor: str = Form(""),
-                            analyze_video: bool = Form(False)):
+                            analyze_video: bool = Form(False),
+                            user: dict = Depends(require_role("uploader"))):
     """
     Upload a CSV file containing meeting recording URLs — this is also the
     "lead sheet" join. The URL and associate-name columns are detected from
@@ -1807,7 +1825,8 @@ async def delete_word_mapping(wrong_word: str):
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/sessions/history")
-async def get_history(limit: int = 20, offset: int = 0, search: str = "", full: bool = False):
+async def get_history(limit: int = 20, offset: int = 0, search: str = "", full: bool = False,
+                       user: dict = Depends(require_role("viewer"))):
     """
     Return one page of completed session metadata — defaults to 20 per
     request (never the entire history at once). `search` filters by
@@ -1877,7 +1896,7 @@ async def clear_history():
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @app.get("/api/v1/dashboard/overview")
-async def dashboard_overview():
+async def dashboard_overview(user: dict = Depends(require_role("viewer"))):
     """All-audits rollup for the Audit Dashboard — KPIs, category breakdown,
     strongest/weakest categories, and trend over time. Read-only aggregation
     over session_store; never touches the audit/scoring pipeline."""
@@ -1909,7 +1928,8 @@ async def get_associate(name: str):
 @app.get("/api/v1/activity")
 async def get_activity(session_id: str = None, associate: str = None, event_type: str = None,
                         actor: str = None, date_from: str = None, date_to: str = None,
-                        search: str = None, limit: int = 200):
+                        search: str = None, limit: int = 200,
+                        user: dict = Depends(require_role("viewer"))):
     """System-wide activity feed with filters — the audit trail."""
     events = activity_log.list_events(
         session_id=session_id, associate=associate, event_type=event_type, actor=actor,
