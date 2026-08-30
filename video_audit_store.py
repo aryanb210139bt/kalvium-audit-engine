@@ -23,7 +23,16 @@ SCREENSHOT_DIR = Path(__file__).parent / "data" / "video_screenshots"
 SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
 
 # This job's own lifecycle — separate from (and doesn't touch) the existing
-# audio pipeline's own ProgressTracker/WebSocket status, which is untouched.
+# audio pipeline's own ProgressTracker/WebSocket status. "extracting_audio"
+# is legacy/no longer set by the pipeline (api/main.py's
+# _run_preprocessed_pipeline used to write it here right after this job
+# completed, silently clobbering 'completed'/'failed' back to a status that
+# then never changed again — every real run finished successfully but the
+# UI polled forever showing this status and never rendered the result. Kept
+# in this list only so old rows stuck at it before the fix still render a
+# recognizable label instead of a raw unknown string — do not set it again;
+# audio-extraction progress belongs to the audio pipeline's own tracker.log(),
+# not this job's status).
 STATUSES = ["queued", "downloading", "reading_duration", "extracting",
             "extracting_audio", "analyzing", "summarizing", "completed", "failed"]
 

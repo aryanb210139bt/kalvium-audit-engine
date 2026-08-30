@@ -362,3 +362,59 @@ def test_shared_download_failure_marks_video_audit_failed_not_stuck_queued(tmp_p
     rec = video_audit_store.get(video_audit_id)
     assert rec["status"] == "failed"       # not stuck at "queued"/"downloading"
     assert rec["error"]                    # error message recorded, not blank
+
+
+def test_successful_run_does_not_clobber_completed_video_status(tmp_path, monkeypatch):
+    # Regression test for a real, 100%-reproducible bug: _run_preprocessed_pipeline
+    # used to unconditionally call video_audit_store.update_status(video_audit_id,
+    # "extracting_audio") right after _preprocess_and_analyze_video returned —
+    # silently overwriting the 'completed' status (with screenshots_json/
+    # summary_json already saved) that function had JUST set. Nothing later in
+    # the success path ever touched video_audit_store again, so the row was
+    # permanently stuck at "extracting_audio" even though the real work (GPT-4o
+    # vision analysis of every screenshot) had already fully succeeded. Caught
+    # live: every row in production stuck at "extracting_audio" already had
+    # screenshots_json AND summary_json populated. The UI polled forever
+    # showing "extracting_audio…" and never rendered the finished analysis.
+    import api.main as main
+    import activity_log
+    from progress_tracker import ProgressTracker
+
+    monkeypatch.setattr(video_audit_store, "DB_PATH", tmp_path / "test_success.db")
+    monkeypatch.setattr(video_audit_store, "_local", threading.local())
+    video_audit_store.init_db()
+    monkeypatch.setattr(activity_log, "DB_PATH", tmp_path / "test_activity_log2.db")
+    monkeypatch.setattr(activity_log, "_local", threading.local())
+    activity_log.init_db()
+
+    session_id = "sess-success"
+    video_audit_id = "va-success"
+    main._sessions[session_id] = {"session_id": session_id, "status": "downloading"}
+    video_audit_store.create(video_audit_id, linked_session_id=session_id, source_url="https://x",
+                              label="Tester", actor="pytest", created_at="2026-01-01T00:00:00")
+
+    fake_video = tmp_path / "recording.mp4"
+    fake_video.write_bytes(b"not a real video, just needs to exist for .stat()")
+
+    def _fake_download(url, dest_dir):
+        return fake_video
+
+    def _fake_preprocess(video_path, vid, linked_session_id, label, actor):
+        # Simulates the real function's own successful completion — it
+        # already marks the row 'completed' with real data before returning.
+        video_audit_store.complete(vid, [{"label": "5%", "filename": "shot.jpg"}],
+                                    {"frames_analyzed": 1, "flags": []}, "2026-01-01T00:00:10")
+
+    monkeypatch.setattr("utils.url_downloader.download_recording", _fake_download)
+    monkeypatch.setattr(main, "_preprocess_and_analyze_video", _fake_preprocess)
+    monkeypatch.setattr("utils.url_downloader.extract_audio_from_local_file", lambda *a, **kw: None)
+    monkeypatch.setattr(main, "_run_pipeline", lambda *a, **kw: None)  # the rest of the real audit — not under test here
+
+    tracker = ProgressTracker(session_id)
+    main._run_preprocessed_pipeline(session_id, "https://x", tmp_path, tracker,
+                                     video_audit_id, "Tester", "pytest")
+
+    rec = video_audit_store.get(video_audit_id)
+    assert rec["status"] == "completed"                 # NOT clobbered back to "extracting_audio"
+    assert rec["screenshots"]                            # the real analysis results are still there
+    assert rec["summary"]["frames_analyzed"] == 1

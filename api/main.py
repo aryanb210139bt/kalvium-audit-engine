@@ -1685,10 +1685,32 @@ def _run_preprocessed_pipeline(session_id: str, url: str, upload_dir: Path, trac
         # helper the standalone trigger uses, so nothing here is duplicated.
         _preprocess_and_analyze_video(video_path, video_audit_id, session_id, label, actor)
 
+        # By the time the call above returns, _preprocess_and_analyze_video has ALREADY
+        # left the video_audit row in its own correct terminal state
+        # ('completed' with screenshots_json/summary_json saved, or 'failed'
+        # with an error) — it never raises past itself. Nothing below this
+        # point should touch video_audit_store's status again: it belongs
+        # entirely to the screenshot/vision job's lifecycle, not the audio
+        # pipeline's. (Bug fixed here: this used to unconditionally call
+        # video_audit_store.update_status(video_audit_id, "extracting_audio")
+        # right after the line above, silently overwriting a just-computed
+        # 'completed' — or 'failed' — status back to a transient one that
+        # then NEVER changed again, since nothing later in this function
+        # updates video_audit_store on the success path. The result: every
+        # video analysis run through this "analyze video" checkbox path
+        # finished its real work — screenshots extracted, GPT-4o vision run,
+        # summary computed and saved — but the UI polled forever showing
+        # "extracting_audio…" and never rendered any of it. Confirmed live:
+        # every row stuck at that status already had screenshots_json AND
+        # summary_json populated. The progress feedback that line was
+        # apparently meant to give the user during audio extraction is
+        # already covered below via tracker.log(), which is where per-audio-
+        # pipeline-stage progress belongs.)
+
         # Audio extraction for the existing pipeline — reuses the exact same
         # FFmpeg call download_as_audio() already uses elsewhere in this app;
         # no second, duplicate extraction implementation.
-        video_audit_store.update_status(video_audit_id, "extracting_audio")
+        tracker.log("Screenshots analyzed — extracting audio for transcription…")
         audio_path = upload_dir / "recording.mp3"
         extract_audio_from_local_file(video_path, audio_path)
         tracker.log("Audio ready — starting existing transcription/audit pipeline…")
