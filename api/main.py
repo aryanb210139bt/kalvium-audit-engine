@@ -459,6 +459,27 @@ async def admin_update_user(user_id: str, req: UpdateUserRequest, admin: dict = 
     return {"status": "updated", "user": auth.get_user(user_id)}
 
 
+@app.delete("/api/v1/admin/users/{user_id}")
+async def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+    """Permanently removes the account (see auth.delete_user — unlike
+    Disable, this isn't reversible). Two guardrails mirror the deck
+    deletion pattern (deck/api/routes.py): never let an admin delete the
+    account they're currently logged in as (instant self-lockout), and
+    never delete the last remaining admin account (would leave nobody able
+    to use Manage Users at all)."""
+    target = auth.get_user(user_id)
+    if not target:
+        raise HTTPException(404, "User not found")
+    if user_id == admin["user_id"]:
+        raise HTTPException(400, "You can't delete the account you're currently logged in as.")
+    if target["role"] == "admin":
+        other_admins = [u for u in auth.list_users() if u["role"] == "admin" and u["user_id"] != user_id]
+        if not other_admins:
+            raise HTTPException(400, "Can't delete the last remaining admin account.")
+    auth.delete_user(user_id)
+    return {"status": "deleted"}
+
+
 # ── Associate roster (the master pick-list used while auditing) ────────────────
 
 class RosterAddRequest(BaseModel):

@@ -62,3 +62,37 @@ def test_disabled_uploader_cannot_authenticate(tmp_path, monkeypatch):
     user = auth.create_user(email="up@kalvium.com", name="Up", password="pw12345678", role="uploader")
     auth.update_user(user["user_id"], status="disabled")
     assert auth.authenticate("up@kalvium.com", "pw12345678") is None
+
+
+# ── delete_user() ────────────────────────────────────────────────────────────
+
+def test_delete_user_removes_the_account(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    user = auth.create_user(email="gone@kalvium.com", name="Gone", password="pw12345678", role="viewer")
+    assert auth.get_user(user["user_id"]) is not None
+
+    auth.delete_user(user["user_id"])
+    assert auth.get_user(user["user_id"]) is None
+    assert auth.authenticate("gone@kalvium.com", "pw12345678") is None
+
+
+def test_delete_user_also_kills_their_active_session(tmp_path, monkeypatch):
+    # Deleting an account must sign it out everywhere immediately, not
+    # leave a session token that still resolves until it happens to expire.
+    _fresh_db(tmp_path, monkeypatch)
+    user = auth.create_user(email="gone@kalvium.com", name="Gone", password="pw12345678", role="viewer")
+    token = auth.create_session(user["user_id"])
+    assert auth.get_session_user(token) is not None
+
+    auth.delete_user(user["user_id"])
+    assert auth.get_session_user(token) is None
+
+
+def test_delete_user_does_not_affect_other_accounts(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    keep = auth.create_user(email="keep@kalvium.com", name="Keep", password="pw12345678", role="admin")
+    gone = auth.create_user(email="gone@kalvium.com", name="Gone", password="pw12345678", role="viewer")
+
+    auth.delete_user(gone["user_id"])
+    assert auth.get_user(keep["user_id"]) is not None
+    assert auth.authenticate("keep@kalvium.com", "pw12345678") is not None

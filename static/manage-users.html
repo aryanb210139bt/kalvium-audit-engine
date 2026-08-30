@@ -98,6 +98,8 @@
 </main>
 
 <script>
+let CURRENT_USER_ID = null;
+
 function escapeHtml(s) {
   if (s == null) return '';
   return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
@@ -171,6 +173,17 @@ async function resetPassword(userId, email) {
   if (res.ok) alert('Password reset.'); else alert('Failed to reset password.');
 }
 
+async function deleteUser(userId, name, email) {
+  if (!window.confirm(`Permanently delete ${name} (${email})? This cannot be undone — use Disable instead if you just want to revoke access temporarily.`)) return;
+  const res = await fetch(`/api/v1/admin/users/${userId}`, { method: 'DELETE' });
+  if (res.ok) {
+    loadUsers();
+  } else {
+    const detail = await res.json().catch(() => ({}));
+    alert(detail.detail || 'Failed to delete account.');
+  }
+}
+
 function renderUserRow(u) {
   const assocLink = u.role === 'associate' ? (escapeHtml(u.associate_name) || '<span style="color:#d1d5db">not linked</span>') : '—';
   const lastLogin = u.last_login_at ? escapeHtml(u.last_login_at.replace('T',' ').slice(0,16)) : 'never';
@@ -184,6 +197,7 @@ function renderUserRow(u) {
     <td class="text-right whitespace-nowrap">
       <button class="btn-secondary" onclick="resetPassword('${u.user_id}','${escapeHtml(u.email)}')">Reset password</button>
       <button class="btn-secondary" onclick="toggleStatus('${u.user_id}','${u.status}')">${u.status === 'active' ? 'Disable' : 'Enable'}</button>
+      ${u.user_id === CURRENT_USER_ID ? '' : `<button class="btn-secondary" style="color:#dc2626;border-color:#fecaca" onclick="deleteUser('${u.user_id}','${escapeHtml(u.name).replace(/'/g,"\\'")}','${escapeHtml(u.email)}')">Delete</button>`}
     </td>
   </tr>`;
 }
@@ -256,6 +270,7 @@ async function boot() {
   if (!res.ok) { window.location.href = '/static/login.html'; return; }
   const user = await res.json();
   if (user.role !== 'admin') { window.location.href = '/static/dashboard.html'; return; }
+  CURRENT_USER_ID = user.user_id;
   document.getElementById('user-chip').textContent = `${user.name} · admin`;
   toggleAssocField();
   loadUsers();

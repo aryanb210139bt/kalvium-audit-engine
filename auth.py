@@ -170,6 +170,21 @@ def update_user(user_id: str, **fields) -> None:
     db.commit()
 
 
+def delete_user(user_id: str) -> None:
+    """Permanently remove an account — unlike Disable (status='disabled',
+    reversible, keeps the row for the audit trail), this actually deletes
+    the row. Safety rules (never delete yourself / the last admin) live in
+    the API layer (api/main.py's admin_delete_user), same split as
+    update_user() above. Sessions are deleted first since there's no ON
+    DELETE CASCADE on sessions.user_id — this also immediately signs the
+    account out everywhere rather than leaving a now-orphaned session
+    token that would 404 on next use."""
+    db = _conn()
+    db.execute("DELETE FROM sessions WHERE user_id=?", (user_id,))
+    db.execute("DELETE FROM users WHERE user_id=?", (user_id,))
+    db.commit()
+
+
 def reset_password(user_id: str, new_password: str) -> None:
     digest, salt = _hash_password(new_password)
     db = _conn()
