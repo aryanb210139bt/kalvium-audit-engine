@@ -541,6 +541,22 @@ def delete_session(session_id: str) -> None:
     db.commit()
 
 
+def update_label(session_id: str, new_label: str) -> bool:
+    """Corrects the associate a session is attributed to — the one field
+    the Audit History list view's Edit action exposes (see api/main.py's
+    PATCH /api/v1/sessions/history/{id}). Scores/grades/AI-written
+    coaching text are intentionally not editable here; this only ever
+    touches `label`, the same field upload_csv_batch sets from the CSV's
+    "Lead Owner" column and reports/associate_analytics.py's tracker-push
+    override also corrects — this is a third, equally narrow way to fix
+    the same one field, not a new concept. Returns False if the session
+    doesn't exist (caller should 404), True on success."""
+    db = _conn()
+    cur = db.execute("UPDATE sessions SET label=? WHERE session_id=?", (new_label, session_id))
+    db.commit()
+    return cur.rowcount > 0
+
+
 def clear_sessions() -> None:
     db = _conn()
     db.execute("DELETE FROM sessions")

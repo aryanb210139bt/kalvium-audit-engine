@@ -2044,8 +2044,37 @@ async def export_history(format: str = "xlsx",
     )
 
 
+class UpdateHistoryLabelRequest(BaseModel):
+    label: str
+
+
+@app.patch("/api/v1/sessions/history/{session_id}")
+async def update_history_label(session_id: str, req: UpdateHistoryLabelRequest,
+                                admin: dict = Depends(require_admin)):
+    """Admin-only, same reasoning as delete below: this mutates a real
+    audit record, unlike the read-only history/dashboard/export endpoints.
+    Only the associate label is editable (see session_store.update_label's
+    docstring) — scores, grades, and AI-written coaching text are not
+    exposed for editing here, by design."""
+    label = req.label.strip()
+    if not label:
+        raise HTTPException(400, "Associate name cannot be empty")
+    if not session_store.update_label(session_id, label):
+        raise HTTPException(404, "Audit not found")
+    from reports.associate_analytics import invalidate_dashboard_cache
+    invalidate_dashboard_cache()
+    return {"status": "updated", "session_id": session_id, "label": label}
+
+
 @app.delete("/api/v1/sessions/history/{session_id}")
-async def delete_history_entry(session_id: str):
+async def delete_history_entry(session_id: str, admin: dict = Depends(require_admin)):
+    """Admin-only (not just require_role("viewer")) — this permanently
+    deletes an audit record, unlike the read-only history/dashboard/export
+    endpoints. Previously had NO auth at all — a real gap found and fixed
+    here, matching the same require_admin gate already used for user
+    deletion (auth.delete_user) and deck deletion."""
+    if not session_store.get_session(session_id):
+        raise HTTPException(404, "Audit not found")
     session_store.delete_session(session_id)
     from reports.associate_analytics import invalidate_dashboard_cache
     invalidate_dashboard_cache()
@@ -2053,7 +2082,7 @@ async def delete_history_entry(session_id: str):
 
 
 @app.delete("/api/v1/sessions/history")
-async def clear_history():
+async def clear_history(admin: dict = Depends(require_admin)):
     session_store.clear_sessions()
     from reports.associate_analytics import invalidate_dashboard_cache
     invalidate_dashboard_cache()

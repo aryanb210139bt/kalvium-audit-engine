@@ -296,3 +296,26 @@ def test_list_sessions_page_no_report_leaves_summary_fields_none(tmp_path, monke
     assert rows[0]["category_scores_json"] is None
     assert rows[0]["top_strengths_json"] is None
     assert rows[0]["improvement_areas_json"] is None
+
+
+# ── update_label — the Audit History list view's Edit action ────────────
+
+def test_update_label_changes_the_label(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    _mk("s1", "Wrong Name", "2026-01-01T00:00:00")
+    assert session_store.update_label("s1", "Correct Name") is True
+    assert session_store.get_session("s1")["label"] == "Correct Name"
+
+
+def test_update_label_returns_false_for_unknown_session(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    assert session_store.update_label("does-not-exist", "Someone") is False
+
+
+def test_update_label_does_not_touch_other_sessions(tmp_path, monkeypatch):
+    _fresh_db(tmp_path, monkeypatch)
+    _mk("s1", "Alice", "2026-01-01T00:00:00")
+    _mk("s2", "Bob", "2026-01-02T00:00:00")
+    session_store.update_label("s1", "Alicia")
+    assert session_store.get_session("s1")["label"] == "Alicia"
+    assert session_store.get_session("s2")["label"] == "Bob"

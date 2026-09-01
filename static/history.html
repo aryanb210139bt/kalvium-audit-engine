@@ -88,6 +88,27 @@
     .dash-row2 { grid-template-columns:1fr; }
   }
 
+  /* ── View toggle (Cards / List) ───────────────────────────────────── */
+  .view-toggle { display:flex; border:1px solid #e5e7eb; border-radius:5px; overflow:hidden; }
+  .view-toggle-btn { font-size:11px; font-weight:600; color:#6b7280; background:#fff; border:none; padding:6px 11px; cursor:pointer; transition:all .15s; }
+  .view-toggle-btn:not(:first-child) { border-left:1px solid #e5e7eb; }
+  .view-toggle-btn:hover { color:var(--k-red); }
+  .view-toggle-btn.active { background:#111827; color:#fff; }
+
+  /* ── List view (Edit/Delete only available here) ─────────────────── */
+  .list-table-wrap { overflow-x:auto; border:1px solid #eceef1; border-radius:10px; background:#fff; }
+  .list-table { width:100%; border-collapse:collapse; font-size:12px; }
+  .list-table th { text-align:left; font-size:10px; font-weight:700; letter-spacing:.03em; text-transform:uppercase; color:#9ca3af; padding:9px 12px; border-bottom:1px solid #f0f0f0; white-space:nowrap; }
+  .list-table td { padding:9px 12px; border-bottom:1px solid #f6f7f8; vertical-align:middle; white-space:nowrap; }
+  .list-table tr:last-child td { border-bottom:none; }
+  .list-assoc-cell { display:flex; align-items:center; gap:6px; max-width:220px; }
+  .list-assoc-name { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .list-icon-btn { border:none; background:none; cursor:pointer; color:#9ca3af; font-size:12px; padding:2px 4px; border-radius:3px; transition:all .15s; }
+  .list-icon-btn:hover { color:var(--k-red); background:var(--k-red-light); }
+  .list-icon-btn.danger:hover { color:#dc2626; background:#fef2f2; }
+  .list-edit-input { font-size:12px; padding:3px 6px; border:1px solid var(--k-red); border-radius:4px; width:160px; outline:none; }
+  .list-session-id { font-family:'JetBrains Mono',monospace; font-size:10.5px; color:#9ca3af; }
+
   /* ── Loading skeletons ────────────────────────────────────────────── */
   @keyframes skeleton-pulse { 0%,100% { opacity:1; } 50% { opacity:.55; } }
   .skeleton-card { height:64px; border-radius:8px; background:#f0f1f3; animation:skeleton-pulse 1.4s ease-in-out infinite; }
@@ -144,7 +165,13 @@
   <section class="mb-7">
     <div class="flex items-center justify-between mb-3">
       <p class="sec-title">Audit History</p>
-      <input id="search-box" type="text" placeholder="Search associate, lead, session ID, prospect ID…" class="k-input" style="width:280px" oninput="debounceSearch()"/>
+      <div class="flex items-center gap-2">
+        <div class="view-toggle">
+          <button id="view-toggle-cards" class="view-toggle-btn active" onclick="setViewMode('cards')">▤ Cards</button>
+          <button id="view-toggle-list" class="view-toggle-btn" onclick="setViewMode('list')">☰ List</button>
+        </div>
+        <input id="search-box" type="text" placeholder="Search associate, lead, session ID, prospect ID…" class="k-input" style="width:260px" oninput="debounceSearch()"/>
+      </div>
     </div>
 
     <div class="filter-bar">
@@ -192,10 +219,23 @@
       <button id="f-clear-btn" class="filter-clear-btn" onclick="clearFilters()" disabled>Clear Filters</button>
     </div>
 
-    <div class="carousel-wrap">
+    <div id="carousel-wrap" class="carousel-wrap">
       <button class="carousel-arrow left" onclick="scrollCarousel(-1)">‹</button>
       <div id="carousel-track" class="carousel-track"><p class="text-xs text-gray-400 p-3">Loading…</p></div>
       <button class="carousel-arrow right" onclick="scrollCarousel(1)">›</button>
+    </div>
+    <div id="list-view" class="hidden">
+      <div class="list-table-wrap">
+        <table class="list-table">
+          <thead>
+            <tr>
+              <th>Associate</th><th>Date</th><th>Duration</th><th>Score</th>
+              <th>Grade</th><th>Session ID</th><th style="text-align:right">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="list-view-tbody"></tbody>
+        </table>
+      </div>
     </div>
     <div id="history-pagination" class="flex items-center justify-between mt-2" style="font-size:10.5px;color:#9ca3af">
       <span id="history-count"></span>
@@ -471,17 +511,116 @@ function renderAuditCard(a) {
   </div>`;
 }
 
+// ── View mode (Cards / List) ─────────────────────────────────────────────
+// Edit/Delete are deliberately only reachable from the List view — the
+// Cards view stays exactly as it was, read-only.
+let _historyViewMode = 'cards';
+
+function setViewMode(mode) {
+  _historyViewMode = mode;
+  document.getElementById('view-toggle-cards').classList.toggle('active', mode === 'cards');
+  document.getElementById('view-toggle-list').classList.toggle('active', mode === 'list');
+  document.getElementById('carousel-wrap').classList.toggle('hidden', mode !== 'cards');
+  document.getElementById('list-view').classList.toggle('hidden', mode !== 'list');
+}
+
 function renderAudits() {
   const track = document.getElementById('carousel-track');
+  const listBody = document.getElementById('list-view-tbody');
   if (!_allAudits.length) {
-    track.innerHTML = hasActiveFilters()
-      ? `<div class="p-3"><p class="text-xs text-gray-400 mb-2">No audits match your filters.</p>
-           <button class="filter-clear-btn" onclick="clearFilters()">Clear Filters</button></div>`
-      : `<p class="text-xs text-gray-400 p-3">No audits found.</p>`;
+    const emptyMsg = hasActiveFilters()
+      ? `<p class="text-xs text-gray-400 mb-2">No audits match your filters.</p>
+         <button class="filter-clear-btn" onclick="clearFilters()">Clear Filters</button>`
+      : `<p class="text-xs text-gray-400">No audits found.</p>`;
+    track.innerHTML = `<div class="p-3">${emptyMsg}</div>`;
+    listBody.innerHTML = `<tr><td colspan="7" class="p-3">${emptyMsg}</td></tr>`;
   } else {
     track.innerHTML = _allAudits.map(renderAuditCard).join('');
+    listBody.innerHTML = _allAudits.map(renderAuditListRow).join('');
   }
   renderHistoryPagination();
+}
+
+function renderAuditListRow(a) {
+  const [gbg, gfg] = gradeColors(a.grade);
+  const score = a.overall_score != null ? a.overall_score.toFixed(1) : '—';
+  const dur = a.duration_seconds ? `${Math.floor(a.duration_seconds/60)}m ${Math.round(a.duration_seconds%60)}s` : '—';
+  const date = escapeHtml((a.date||'').replace('T',' ').slice(0,16));
+  const sid = escapeHtml(a.session_id||'');
+  const detailHref = `/static/audit-detail.html?session_id=${encodeURIComponent(a.session_id)}&label=${encodeURIComponent(a.label||'')}`;
+  return `<tr id="list-row-${sid}">
+    <td>
+      <div class="list-assoc-cell" id="list-assoc-${sid}">
+        <span class="list-assoc-name" title="${escapeHtml(a.label||'Unlabeled')}">${escapeHtml(a.label || 'Unlabeled')}</span>
+        <button class="list-icon-btn" title="Edit associate" onclick="startEditAssociate('${sid}')">✎</button>
+      </div>
+    </td>
+    <td>${date}</td>
+    <td>${dur}</td>
+    <td style="color:${scoreColor(a.overall_score||0)};font-family:'JetBrains Mono',monospace">${score}</td>
+    <td><span class="audit-grade-pill" style="background:${gbg};color:${gfg}">${escapeHtml(a.grade||'—')}</span></td>
+    <td><span class="list-session-id">${sid.slice(0,8)}</span></td>
+    <td style="text-align:right">
+      <a class="footer-link" style="display:inline-block;width:auto;padding:3px 8px" href="${detailHref}">Full →</a>
+      <button class="list-icon-btn danger" title="Delete this audit" onclick="deleteAudit('${sid}')">🗑</button>
+    </td>
+  </tr>`;
+}
+
+function startEditAssociate(sessionId) {
+  const cell = document.getElementById(`list-assoc-${sessionId}`);
+  const audit = _allAudits.find(a => a.session_id === sessionId);
+  if (!cell || !audit) return;
+  cell.innerHTML = `
+    <input type="text" class="list-edit-input" id="edit-input-${sessionId}" value="${escapeHtml(audit.label||'')}"
+           onkeydown="if(event.key==='Enter') saveEditAssociate('${sessionId}'); if(event.key==='Escape') renderAudits();"/>
+    <button class="list-icon-btn" title="Save" onclick="saveEditAssociate('${sessionId}')">✓</button>
+    <button class="list-icon-btn" title="Cancel" onclick="renderAudits()">✕</button>
+  `;
+  document.getElementById(`edit-input-${sessionId}`).focus();
+}
+
+async function saveEditAssociate(sessionId) {
+  const input = document.getElementById(`edit-input-${sessionId}`);
+  const newLabel = input.value.trim();
+  if (!newLabel) { alert('Associate name cannot be empty.'); return; }
+  try {
+    const res = await fetch(`/api/v1/sessions/history/${sessionId}`, {
+      method: 'PATCH', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ label: newLabel }),
+    });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Failed to update');
+    }
+    const audit = _allAudits.find(a => a.session_id === sessionId);
+    if (audit) audit.label = newLabel;
+    renderAudits();
+    loadDashboard();  // associate grouping may have changed
+    loadFilterOptions();  // dropdown's associate list may have a new/changed name
+  } catch (e) {
+    alert(`Could not save: ${e.message}`);
+    renderAudits();
+  }
+}
+
+async function deleteAudit(sessionId) {
+  const audit = _allAudits.find(a => a.session_id === sessionId);
+  const name = audit ? (audit.label || 'this audit') : 'this audit';
+  if (!confirm(`Permanently delete the audit for "${name}"? This cannot be undone.`)) return;
+  try {
+    const res = await fetch(`/api/v1/sessions/history/${sessionId}`, { method: 'DELETE' });
+    if (!res.ok) {
+      const detail = await res.json().catch(() => ({}));
+      throw new Error(detail.detail || 'Failed to delete');
+    }
+    _allAudits = _allAudits.filter(a => a.session_id !== sessionId);
+    if (_historyTotal > 0) _historyTotal -= 1;
+    renderAudits();
+    loadDashboard();
+  } catch (e) {
+    alert(`Could not delete: ${e.message}`);
+  }
 }
 
 function renderHistoryPagination() {
@@ -778,6 +917,13 @@ async function boot() {
   const user = await res.json();
   if (!['admin', 'viewer'].includes(user.role)) { window.location.href = '/static/dashboard.html'; return; }
   document.getElementById('user-chip').textContent = `${user.name} · ${user.role}`;
+  // List view's Edit/Delete are admin-only server-side (require_admin) —
+  // a "viewer" role is intentionally read-only, so the List toggle (and
+  // the controls it exposes) is hidden for them entirely rather than
+  // shown-then-rejected on every click.
+  if (user.role !== 'admin') {
+    document.getElementById('view-toggle-list').classList.add('hidden');
+  }
   wireCarouselInteractions();
   loadFilterOptions();
   loadAudits();
