@@ -3,14 +3,30 @@ reports/audit_export.py
 Server-side Excel (.xlsx) and CSV export for the Audit History feature —
 one row per audited session, built from the SAME filters as the history
 list and dashboard (history_filters.HistoryFilters), fetched in batches via
-session_store.iter_sessions_for_export() so memory stays flat regardless
-of how many rows match (60 today, architected for 10,000+): the Postgres
-query is paginated internally (same keyset mechanism as "Load more"), and
-the workbook is written in openpyxl's write-only streaming mode, which
-never holds more than the current row in memory.
+session_store.iter_sessions_for_export() so the Postgres side stays flat
+regardless of how many rows match (60 today, architected for 10,000+): the
+query is paginated internally (same keyset mechanism as "Load more").
 
-Column order and content follow the feature spec exactly — see
-CATEGORY_EXPORT_ORDER, derived directly from
+The XLSX has three sheets:
+  1. "Audit Results"  — the manager-facing summary (EXPORT_COLUMNS, below).
+  2. "Tracker Format"  — the exact Audit Tracker / Google Sheet column
+     schema (reports/audit_excel_manager.COLUMNS), one row per session,
+     built via that module's own auto_fill_from_report() — the SAME
+     function the per-audit "Push to Tracker" feature already uses, so
+     this sheet is guaranteed to match what actually gets pushed, not a
+     second reimplementation. Requires each session's full report_json
+     (deck_coverage/duration/talk-ratio/etc, not just the 3 summary
+     fields) — see iter_sessions_for_export(include_full_report=True).
+     Video Snapshot Analysis fields (Demo Attendees, Camera Status,
+     Screen-share Mode) are left blank here even when that add-on ran for
+     a session — auto_fill_from_report() accepts that data as an optional
+     argument the export doesn't currently look up per session (would be
+     an extra query per row); everything else on this sheet is complete.
+  3. "Export Summary"  — filters used + cheap aggregate metrics.
+CSV export has none of this — one flat table only (EXPORT_COLUMNS).
+
+Column order and content for the main sheet follow the feature spec
+exactly — see CATEGORY_EXPORT_ORDER, derived directly from
 audit.evaluation_framework.EVALUATION_CATEGORIES (not a hand-copied
 parallel list) so the two can never drift apart.
 
@@ -169,11 +185,30 @@ def generate_csv(filters=None) -> tuple[bytes, str]:
     return buf.getvalue().encode("utf-8-sig"), _export_filename("csv", filters)  # BOM: Excel opens UTF-8 CSVs correctly
 
 
+def _tracker_row_for_session(rec: dict) -> dict:
+    """Builds one row matching reports.audit_excel_manager.COLUMNS exactly
+    — reuses that module's own auto_fill_from_report(), the SAME logic the
+    per-audit "Push to Tracker" feature already uses, so the Tracker Format
+    sheet can never drift from what a real tracker push actually produces."""
+    from reports.audit_excel_manager import auto_fill_from_report
+    report = dict(rec.get("full_report") or {})
+    report.setdefault("session_id", rec.get("session_id", ""))
+    session_meta = {
+        "source_url": rec.get("source_url") or "",
+        "label": rec.get("label") or "",
+        "lead_sheet": rec.get("lead_sheet") or {},
+        "video_analysis": None,  # see module docstring: not looked up per export row
+    }
+    return auto_fill_from_report(report, session_meta)
+
+
 def generate_xlsx(filters=None) -> tuple[bytes, str]:
-    """Returns (xlsx bytes, filename). Two sheets: 'Audit Results' (one row
-    per session, frozen header, autofilter, sized columns, wrapped long-text
-    columns, clickable Lead/Demo Link) and 'Export Summary' (filters used +
-    cheap aggregate metrics, reusing the dashboard's own numbers).
+    """Returns (xlsx bytes, filename). Three sheets: 'Audit Results' (one
+    row per session, frozen header, autofilter, sized columns, wrapped
+    long-text columns, clickable Lead/Demo Link), 'Tracker Format' (the
+    exact Audit Tracker column schema — see _tracker_row_for_session), and
+    'Export Summary' (filters used + cheap aggregate metrics, reusing the
+    dashboard's own numbers).
 
     Normal (non-write-only) workbook mode — write-only mode was tried
     first for the memory-flatness Section 21 asks for, but openpyxl's
@@ -187,8 +222,9 @@ def generate_xlsx(filters=None) -> tuple[bytes, str]:
     XLSX library and not a practical concern at the 10K-row target scale
     (tens of MB, not hundreds)."""
     from openpyxl import Workbook
-    from openpyxl.styles import Font, Alignment
+    from openpyxl.styles import Font, Alignment, PatternFill
     from openpyxl.utils import get_column_letter
+    from reports.audit_excel_manager import COLUMNS as TRACKER_COLUMNS, _header_bg
 
     total = session_store.count_sessions_matching(filters)
 
@@ -214,8 +250,22 @@ def generate_xlsx(filters=None) -> tuple[bytes, str]:
     for i, col_name in enumerate(EXPORT_COLUMNS, start=1):
         ws.column_dimensions[get_column_letter(i)].width = col_widths.get(col_name, 13)
 
+    # Tracker Format sheet — same styling approach (header background per
+    # column) as the live master tracker (reports/audit_excel_manager),
+    # via that module's own _header_bg() so the two never look different.
+    tracker_ws = wb.create_sheet("Tracker Format")
+    tracker_wrap = Alignment(wrap_text=True, vertical="top")
+    for i, col_name in enumerate(TRACKER_COLUMNS, start=1):
+        bg, fg = _header_bg(i)
+        cell = tracker_ws.cell(row=1, column=i, value=col_name.replace("\n", " ").strip())
+        cell.font = Font(bold=True, color=fg)
+        cell.fill = PatternFill(start_color=bg, end_color=bg, fill_type="solid")
+        cell.alignment = tracker_wrap
+        tracker_ws.column_dimensions[get_column_letter(i)].width = 16
+
     row_idx = 1
-    for batch in session_store.iter_sessions_for_export(filters, batch_size=EXPORT_BATCH_SIZE):
+    for batch in session_store.iter_sessions_for_export(filters, batch_size=EXPORT_BATCH_SIZE,
+                                                          include_full_report=True):
         for rec in batch:
             row_idx += 1
             row = _row_for_session(rec)
@@ -228,8 +278,14 @@ def generate_xlsx(filters=None) -> tuple[bytes, str]:
                     cell.hyperlink = value
                     cell.font = link_font
 
+            tracker_row = _tracker_row_for_session(rec)
+            for i, col_name in enumerate(TRACKER_COLUMNS, start=1):
+                tracker_ws.cell(row=row_idx, column=i, value=tracker_row.get(col_name, ""))
+
     ws.freeze_panes = "A2"
     ws.auto_filter.ref = f"A1:{get_column_letter(len(EXPORT_COLUMNS))}{max(row_idx, 1)}"
+    tracker_ws.freeze_panes = "A2"
+    tracker_ws.auto_filter.ref = f"A1:{get_column_letter(len(TRACKER_COLUMNS))}{max(row_idx, 1)}"
 
     summary_ws = wb.create_sheet("Export Summary")
     for r, (label, value) in enumerate(_summary_rows(filters, total), start=1):

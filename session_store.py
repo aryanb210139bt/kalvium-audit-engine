@@ -405,7 +405,7 @@ def count_sessions_matching(filters=None) -> int:
     return _conn().execute(f"SELECT COUNT(*) AS n FROM sessions{where}", params).fetchone()["n"]
 
 
-def iter_sessions_for_export(filters=None, batch_size: int = 500):
+def iter_sessions_for_export(filters=None, batch_size: int = 500, include_full_report: bool = False):
     """
     Yields matching sessions in batches (each a list[dict]), for the
     export feature — never materializes the whole result set in memory at
@@ -416,6 +416,16 @@ def iter_sessions_for_export(filters=None, batch_size: int = 500):
     query the whole export makes, repeated only as many times as there are
     batches, each fetching the NEXT batch_size rows via keyset pagination
     exactly like the history page's "Load more").
+
+    include_full_report: additionally attaches the ENTIRE parsed
+    report_json (r["full_report"]) per row — needed for the export's
+    Tracker Format sheet, which reuses reports/audit_excel_manager.
+    auto_fill_from_report() (the same per-audit "Push to Tracker" logic)
+    and therefore needs deck_coverage/duration_seconds/talk_ratio/
+    participant_intelligence, not just the 3 summary fields the main
+    export sheet and history cards use. Off by default since it's a real
+    extra cost (report_json averages ~50KB/row) — only pay it when the
+    caller actually needs the Tracker Format sheet.
     """
     cursor = None
     while True:
@@ -431,6 +441,7 @@ def iter_sessions_for_export(filters=None, batch_size: int = 500):
         # paying for it, at the cost of one extra small query per batch.
         ids = [r["session_id"] for r in rows]
         lead_sheets = _get_lead_sheets_bulk(ids)
+        full_reports = get_reports_bulk(ids) if include_full_report else {}
         for r in rows:
             r["lead_sheet"] = lead_sheets.get(r["session_id"], {})
             # Normalize the backend-native JSON shape once, here, so
@@ -441,6 +452,8 @@ def iter_sessions_for_export(filters=None, batch_size: int = 500):
             r["category_scores_json"] = parse_json_field(r.get("category_scores_json"))
             r["top_strengths_json"] = parse_json_field(r.get("top_strengths_json"))
             r["improvement_areas_json"] = parse_json_field(r.get("improvement_areas_json"))
+            if include_full_report:
+                r["full_report"] = full_reports.get(r["session_id"]) or {}
         yield rows
 
         sort_col = filters.sort_column if filters is not None else "created_at"

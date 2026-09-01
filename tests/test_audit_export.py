@@ -123,11 +123,11 @@ def test_generate_csv_filtered_excludes_non_matching(tmp_path, monkeypatch):
 
 # ── XLSX ──────────────────────────────────────────────────────────────────
 
-def test_generate_xlsx_has_two_sheets(tmp_path, monkeypatch):
+def test_generate_xlsx_has_three_sheets(tmp_path, monkeypatch):
     _seed_two(tmp_path, monkeypatch)
     content, filename = audit_export.generate_xlsx()
     wb = openpyxl.load_workbook(io.BytesIO(content))
-    assert wb.sheetnames == ["Audit Results", "Export Summary"]
+    assert wb.sheetnames == ["Audit Results", "Tracker Format", "Export Summary"]
     assert filename.endswith(".xlsx")
 
 
@@ -226,6 +226,86 @@ def test_export_filename_plain_when_unfiltered(tmp_path, monkeypatch):
     _, filename = audit_export.generate_xlsx(None)
     assert "kalvium_audit_export_" in filename
     assert filename.count("_") == 3  # kalvium_audit_export_YYYY-MM-DD.xlsx — no extra hint segment
+
+
+# ── Tracker Format sheet (exact Audit Tracker column schema) ────────────
+
+def test_tracker_format_header_matches_audit_excel_manager_columns(tmp_path, monkeypatch):
+    from reports.audit_excel_manager import COLUMNS as TRACKER_COLUMNS
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    tw = openpyxl.load_workbook(io.BytesIO(content))["Tracker Format"]
+    header = [c.value for c in tw[1]]
+    # Compared with newlines normalized (the sheet renders header cells
+    # with wrap_text instead of embedded \n) — same 65 columns, same order.
+    assert header == [c.replace("\n", " ").strip() for c in TRACKER_COLUMNS]
+    assert len(header) == 65
+
+
+def test_tracker_format_row_count_matches_main_sheet(tmp_path, monkeypatch):
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    wb = openpyxl.load_workbook(io.BytesIO(content))
+    assert wb["Tracker Format"].max_row == wb["Audit Results"].max_row == 3
+
+
+def test_tracker_format_pulls_lead_sheet_and_scores_correctly(tmp_path, monkeypatch):
+    from reports.audit_excel_manager import COLUMNS as TRACKER_COLUMNS
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    tw = openpyxl.load_workbook(io.BytesIO(content))["Tracker Format"]
+    header = [c.value for c in tw[1]]
+    sid_col = header.index("Session ID") + 1
+    r = next(r for r in range(2, tw.max_row + 1) if tw.cell(row=r, column=sid_col).value == "s1")
+    row = {header[i]: c.value for i, c in enumerate(tw[r])}
+    assert row["Lead Owner"] == "Abdul Kader Shanavas J"
+    assert row["TL Name"] == "Praveen GP"
+    assert row["Demo Date"] == "2026-08-05 12:00:00"
+    assert row["Payment done"] == "Yes"
+    assert row["Overall Score"] == 82.5
+    assert row["Grade"] == "A"
+    assert row["Closing Skills Score"] == 3.0
+    assert row["Rapport Building Score"] == 9.0
+
+
+def test_tracker_format_respects_filters_same_as_main_sheet(tmp_path, monkeypatch):
+    _seed_two(tmp_path, monkeypatch)
+    f = hf.parse_history_filters(associate="Abdul Kader Shanavas J")
+    content, _ = audit_export.generate_xlsx(f)
+    tw = openpyxl.load_workbook(io.BytesIO(content))["Tracker Format"]
+    assert tw.max_row == 2  # header + 1 matching row only
+
+
+def test_tracker_format_freeze_panes_and_autofilter(tmp_path, monkeypatch):
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    tw = openpyxl.load_workbook(io.BytesIO(content))["Tracker Format"]
+    assert tw.freeze_panes == "A2"
+    assert tw.auto_filter.ref is not None
+
+
+def test_tracker_format_deliberately_includes_phone_number(tmp_path, monkeypatch):
+    # Unlike the "Audit Results" sheet, the Tracker Format sheet
+    # intentionally matches the real Audit Tracker schema exactly —
+    # including Phone Number, which the live tracker already carries for
+    # every push (this isn't new PII exposure, it replicates an existing,
+    # already-authorized data flow the user explicitly asked to mirror).
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    tw = openpyxl.load_workbook(io.BytesIO(content))["Tracker Format"]
+    header = [c.value for c in tw[1]]
+    assert "Phone Number" in header
+
+
+def test_main_results_sheet_still_excludes_pii_when_tracker_sheet_present(tmp_path, monkeypatch):
+    # Regression guard: adding the Tracker Format sheet must not leak
+    # Phone/Email into the manager-facing "Audit Results" sheet.
+    _seed_two(tmp_path, monkeypatch)
+    content, _ = audit_export.generate_xlsx()
+    ws = openpyxl.load_workbook(io.BytesIO(content))["Audit Results"]
+    header = [c.value for c in ws[1]]
+    assert "Phone Number" not in header
+    assert "Email" not in header
 
 
 # ── CATEGORY_EXPORT_ORDER derives from the real evaluation framework ────
