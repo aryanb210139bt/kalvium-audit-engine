@@ -31,6 +31,21 @@ from pydantic import BaseModel
 from config.settings import get_settings
 from progress_tracker import ProgressRegistry
 
+# Configure logging unconditionally at import time — NOT only inside the
+# `if __name__ == "__main__":` block below, which never executes when the
+# app is launched via `uvicorn api.main:app ...` (both start.sh and the
+# Dockerfile's CMD launch it exactly that way; Render never runs this file
+# as a script). Without this here, basicConfig() never runs at all in
+# either local dev or production, so every module's logger.info() call
+# across the whole app — including transcription/sarvam_batch.py's and
+# pipeline_v3.py's per-job STT logging — is silently dropped (Python's
+# root logger has no handler, so only the WARNING+ "logging.lastResort"
+# fallback ever surfaces). Confirmed missing by testing this session:
+# real INFO-level pipeline logs were absent from a live local run's output
+# until this was added. basicConfig() is a no-op if a handler already
+# exists, so this doesn't conflict with the __main__ block calling it again.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
