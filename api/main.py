@@ -1084,6 +1084,27 @@ async def get_stt_status(session_id: str):
     """
     from transcription import sarvam_job_store
     job = sarvam_job_store.get(session_id)
+
+    # >2h recordings split into N segments (N derived dynamically from
+    # duration — never fixed) store one row per segment instead of a single
+    # row under the bare session_id. Detect that case and return aggregated,
+    # COUNT-based progress (never inferred from "highest segment index
+    # completed") plus per-segment detail.
+    segments = sarvam_job_store.list_segments(session_id)
+    if segments:
+        sarvam_job_store.mark_stale_as_interrupted(
+            settings.sarvam_batch_stale_threshold_sec, datetime.utcnow().isoformat())
+        progress = sarvam_job_store.segment_progress(session_id)
+        overall = ("completed" if progress["failed"] == 0 and progress["completed"] == progress["total_segments"]
+                   else "stt_failed" if progress["failed"] and progress["pending"] == 0 and progress["processing"] == 0
+                   else "processing")
+        return {
+            "session_id": session_id,
+            "status": overall,
+            "stage": f"{progress['completed']}/{progress['total_segments']} segments completed",
+            **progress,
+        }
+
     if not job:
         raise HTTPException(404, "No Sarvam Batch STT job recorded for this session")
     return {

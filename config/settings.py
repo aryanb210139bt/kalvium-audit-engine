@@ -49,6 +49,19 @@ class Settings(BaseSettings):
     sarvam_batch_poll_backoff: float = 1.6      # geometric backoff factor
     sarvam_batch_poll_timeout_sec: int = 10800  # 3h ceiling before giving up (generous for a 2h file)
 
+    # Only relevant for the rare >2h recording, split into N segments by
+    # AudioProcessor.split_for_batch. N is always derived dynamically from
+    # actual duration — never hard-coded — and this caps how many segments'
+    # Sarvam jobs run at once; it is intentionally decoupled from N itself
+    # (N=5 or N=500 both respect this same cap, never "one worker per segment").
+    sarvam_batch_segment_concurrency: int = 3
+    # A segment row stuck in a non-terminal status whose updated_at hasn't
+    # moved in this long is presumed orphaned (its worker died without
+    # marking it failed) — see sarvam_job_store.mark_stale_as_interrupted.
+    # Generous relative to the poll cadence above so an in-progress poll
+    # backoff is never mistaken for staleness.
+    sarvam_batch_stale_threshold_sec: int = 600
+
     # Diarization: "auto" | "pyannote" | "stereo" | "mock"
     diarization_provider: str = "auto"
     hf_token: str = ""   # HuggingFace token for Pyannote

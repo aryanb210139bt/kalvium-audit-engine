@@ -607,178 +607,263 @@ class DemoAuditPipelineV3:
 
     def _batch_stt(self, session_id: str, segments: list[tuple[Path, float]]) -> list[Utterance]:
         """
-        Runs the async Batch STT lifecycle (initialise -> upload -> start ->
-        poll -> download -> parse) per segment — almost always a single
-        segment covering the whole recording; more than one only for >2h
-        recordings split by AudioProcessor.split_for_batch.
+        Runs the async Batch STT lifecycle per segment — almost always a
+        single segment covering the whole recording (the ≤2h default case:
+        one Sarvam job, no chunk-level bookkeeping needed at all). More than
+        one segment only for >2h recordings split by
+        AudioProcessor.split_for_batch, where N is always derived from the
+        actual duration — never a fixed number, and never assumed small.
 
-        Smart-resume: before submitting anything, checks whether a Sarvam
-        job was already durably recorded for this session_id (sarvam_job_
-        store) and, if so, live-checks *that* job's current state on
-        Sarvam's side rather than blindly resubmitting — this is what makes
-        Resume/Retry never re-pay for a job that already succeeded (or is
-        still running) when a previous attempt was interrupted by a server
-        restart or a cancel.
+        For N==1, processed directly (no pre-created row, no worker pool —
+        unchanged from the original single-job design). For N>1: all N
+        segment rows are pre-created as 'pending' up front (so total/progress
+        are always known from real persisted rows, not inferred), then
+        processed through a bounded ThreadPoolExecutor
+        (SARVAM_BATCH_SEGMENT_CONCURRENCY workers — decoupled from N; N=5 or
+        N=500 both respect the same cap). Segments complete in whatever
+        order their Sarvam jobs finish, not sequentially — progress is
+        always COUNT(status=X) over sarvam_job_store's real rows (see
+        segment_progress()), never "highest index seen". One segment failing
+        does not stop the others; failures are collected and raised once
+        every submitted segment has been attempted.
         """
         from transcription import sarvam_batch, sarvam_job_store
+
+        if len(segments) == 1:
+            wav_path, offset = segments[0]
+            utterances = self._process_segment(session_id, wav_path, offset, num_segments=1)
+            return sorted(utterances, key=lambda u: u.start_time)
+
+        now = datetime.utcnow().isoformat()
+        sarvam_job_store.create_pending_segments(session_id, [str(p) for p, _ in segments], now)
+        concurrency = settings.sarvam_batch_segment_concurrency
+        logger.info(f"[STT] session={session_id}: {len(segments)} segment(s) to process, "
+                    f"max {concurrency} concurrent")
+        if self.p: self.p.log(f"Sarvam Batch STT → {len(segments)} segment(s), "
+                               f"up to {concurrency} concurrent")
+
+        all_utterances: list[Utterance] = []
+        errors: list[str] = []
+        with ThreadPoolExecutor(max_workers=concurrency) as ex:
+            future_map = {
+                ex.submit(self._process_segment, f"{session_id}::seg{i}", wav_path, offset, len(segments)): i
+                for i, (wav_path, offset) in enumerate(segments)
+            }
+            for future in as_completed(future_map):
+                seg_idx = future_map[future]
+                try:
+                    all_utterances.extend(future.result())
+                except sarvam_batch.SttJobFailedError as exc:
+                    errors.append(f"segment {seg_idx}: {exc}")
+                    logger.error(f"[STT] session={session_id} segment {seg_idx} failed: {exc}")
+                progress = sarvam_job_store.segment_progress(session_id)
+                logger.info(f"[STT] session={session_id} progress: "
+                            f"{progress['completed']}/{progress['total_segments']} completed, "
+                            f"{progress['processing']} processing, {progress['failed']} failed")
+                if self.p: self.p.log(
+                    f"Sarvam Batch STT → {progress['completed']}/{progress['total_segments']} "
+                    f"segments completed ({progress['failed']} failed)")
+
+        if errors:
+            raise sarvam_batch.SttJobFailedError(
+                f"{len(errors)}/{len(segments)} segment(s) failed permanently: " + "; ".join(errors[:5])
+            )
+
+        return sorted(all_utterances, key=lambda u: u.start_time)
+
+    def _process_segment(self, seg_session_id: str, wav_path: Path, offset: float,
+                          num_segments: int) -> list[Utterance]:
+        """
+        Full per-segment lifecycle: cached-transcript short-circuit ->
+        smart-resume (live status check on a prior job) -> initialise ->
+        upload -> start -> poll -> download -> parse -> cache -> build
+        Utterances. Safe to call concurrently for different seg_session_ids
+        (each only ever touches its own DB row; no shared mutable state).
+        """
+        import json as _json
+        import dataclasses
+        from transcription import sarvam_batch, sarvam_job_store
+
+        now = datetime.utcnow().isoformat()
+        prior = sarvam_job_store.get(seg_session_id)
+
+        # Zero-cost skip: a previously COMPLETED segment's parsed transcript
+        # is cached in the DB — never contact Sarvam again for it, not even
+        # a status check. This is the strongest form of "never retranscribe
+        # a completed chunk" — it holds even if Sarvam later expires/evicts
+        # the job on its own side.
+        if prior and prior.get("status") == "completed" and prior.get("transcript_json"):
+            logger.info(f"[STT] session={seg_session_id}: cached transcript found — "
+                        f"skipping Sarvam entirely (0 calls)")
+            cached = _json.loads(prior["transcript_json"])
+            result = sarvam_batch.BatchTranscriptResult(
+                transcript=cached.get("transcript", ""),
+                language_code=cached.get("language_code", "unknown"),
+                has_diarization=cached.get("has_diarization", False),
+                segments=[sarvam_batch.DiarizedSegment(**s) for s in cached.get("segments", [])],
+            )
+            return self._utterances_from_result(result, wav_path, offset)
+
+        job = None
+        skip_submit = False
+        if prior and prior.get("sarvam_job_id"):
+            live_state = sarvam_batch.resolve_existing_job_state(prior["sarvam_job_id"])
+            if live_state == "Completed":
+                logger.info(f"[STT] session={seg_session_id} job={prior['sarvam_job_id']} "
+                            f"already Completed — resuming without resubmission")
+                if self.p: self.p.log(f"Sarvam job {prior['sarvam_job_id']} already completed — "
+                                       f"reusing (no resubmission, no re-pay)")
+                job = sarvam_batch.get_job_handle(prior["sarvam_job_id"])
+                skip_submit = True
+            elif live_state in ("Accepted", "Pending", "Running"):
+                logger.info(f"[STT] session={seg_session_id} job={prior['sarvam_job_id']} "
+                            f"still {live_state} — resuming poll without resubmission")
+                if self.p: self.p.log(f"Sarvam job {prior['sarvam_job_id']} still {live_state} — "
+                                       f"resuming poll (no resubmission)")
+                job = sarvam_batch.get_job_handle(prior["sarvam_job_id"])
+                skip_submit = True
+                sarvam_job_store.update_status(seg_session_id, "started", now=now)
+
+        if not skip_submit:
+            seg_duration = self.processor.get_duration(wav_path)
+            try:
+                job = sarvam_batch.submit_job(wav_path)
+            except Exception as exc:
+                logger.error(f"[STT] session={seg_session_id} initialise failed: {exc}")
+                sarvam_job_store.upsert_submitted(seg_session_id, "", str(wav_path), seg_duration,
+                                                   num_segments, now)
+                sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc), now=now)
+                raise sarvam_batch.SttJobFailedError(f"Sarvam job initialisation failed: {exc}") from exc
+
+            sarvam_job_store.upsert_submitted(seg_session_id, job.job_id, str(wav_path),
+                                               seg_duration, num_segments, now)
+            logger.info(f"[STT] session={seg_session_id} job={job.job_id} submitted "
+                        f"(duration={seg_duration:.0f}s)")
+            if self.p: self.p.log(f"Sarvam Batch STT → Job submitted (job_id={job.job_id})")
+
+            try:
+                sarvam_batch.upload_and_start(job, wav_path)
+                sarvam_job_store.update_status(seg_session_id, "started",
+                                                now=datetime.utcnow().isoformat())
+            except Exception as exc:
+                logger.error(f"[STT] session={seg_session_id} job={job.job_id} upload/start failed: {exc}")
+                sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
+                                                now=datetime.utcnow().isoformat())
+                raise sarvam_batch.SttJobFailedError(
+                    f"Sarvam upload/start failed for job {job.job_id}: {exc}") from exc
+
+        if self.p: self.p.log("Sarvam Batch STT → Processing")
+
+        def _on_poll(status, _sid=seg_session_id):
+            sarvam_job_store.update_status(_sid, "polling", now=datetime.utcnow().isoformat())
+            logger.info(f"[STT] session={_sid} job={status.job_id} status={status.job_state} "
+                        f"total_files={getattr(status, 'total_files', None)} "
+                        f"ok={getattr(status, 'successful_files_count', None)} "
+                        f"failed={getattr(status, 'failed_files_count', None)}")
+
+        def _is_cancelled(_sid=seg_session_id):
+            return sarvam_job_store.is_cancel_requested(_sid)
+
+        try:
+            final_state = sarvam_batch.poll_with_backoff(
+                job, seg_session_id, on_status=_on_poll, is_cancelled=_is_cancelled)
+        except sarvam_batch.SttJobFailedError as exc:
+            sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
+                                            now=datetime.utcnow().isoformat())
+            logger.error(f"[STT] session={seg_session_id} timed out waiting on Sarvam: {exc}")
+            raise
+
+        if final_state == "Cancelled":
+            sarvam_job_store.update_status(seg_session_id, "cancelled",
+                                            now=datetime.utcnow().isoformat())
+            logger.info(f"[STT] session={seg_session_id} cancelled — job {job.job_id} "
+                        f"keeps running on Sarvam's side; Resume will pick up its result")
+            if self.p: self.p.log("Transcription cancelled")
+            raise sarvam_batch.SttJobFailedError(f"Cancelled by user (job {job.job_id} still running on Sarvam)")
+
+        if final_state == "Failed":
+            try:
+                file_results = job.get_file_results()
+                err = "; ".join(
+                    (f.get("error_message") or "unknown error") for f in file_results.get("failed", [])
+                ) or "Sarvam job failed"
+            except Exception:
+                err = "Sarvam job failed"
+            sarvam_job_store.update_status(seg_session_id, "stt_failed", err,
+                                            now=datetime.utcnow().isoformat())
+            logger.error(f"[STT] session={seg_session_id} job={job.job_id} failed: {err}")
+            raise sarvam_batch.SttJobFailedError(f"Sarvam job {job.job_id} failed: {err}")
+
+        if self.p: self.p.log("Sarvam Batch STT → Completed")
+
+        out_dir = wav_path.parent / "sarvam_batch_out"
+        try:
+            result = sarvam_batch.download_and_parse(job, wav_path, out_dir)
+        except sarvam_batch.SttJobFailedError as exc:
+            sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
+                                            now=datetime.utcnow().isoformat())
+            logger.error(f"[STT] session={seg_session_id} job={job.job_id} download/parse failed: {exc}")
+            raise
+
+        cache_payload = _json.dumps({
+            "transcript": result.transcript,
+            "language_code": result.language_code,
+            "has_diarization": result.has_diarization,
+            "segments": [dataclasses.asdict(s) for s in result.segments],
+        })
+        sarvam_job_store.save_transcript(seg_session_id, cache_payload, now=datetime.utcnow().isoformat())
+        logger.info(f"[STT] session={seg_session_id} job={job.job_id} completed "
+                    f"({len(result.segments)} segments, diarized={result.has_diarization})")
+        if self.p: self.p.log(f"Sarvam Batch STT → Transcript ready "
+                               f"({len(result.segments)} segments, diarized={result.has_diarization})")
+
+        return self._utterances_from_result(result, wav_path, offset)
+
+    def _utterances_from_result(self, result, wav_path: Path, offset: float) -> list[Utterance]:
+        """Speaker-role assignment + Utterance construction for one parsed
+        segment's BatchTranscriptResult, shared by the live-fetch and
+        cached-transcript paths in _process_segment."""
         from diarization.diarizer import assign_roles_by_talktime
         from config.models import AudioChunk
 
-        all_utterances: list[Utterance] = []
+        chunk_role = None
+        if result.has_diarization:
+            durations: dict[str, float] = {}
+            for seg in result.segments:
+                durations[seg.speaker_id] = durations.get(seg.speaker_id, 0.0) + max(0.0, seg.end - seg.start)
+            role_map = assign_roles_by_talktime(durations)
+        else:
+            # Fallback: existing acoustic diarizer (stereo/mono-energy), run
+            # directly against the segment wav using the timestamped-chunk
+            # boundaries as its "chunks" input — no physical re-splitting
+            # needed (read_wav_rms reads time ranges directly from the file).
+            role_map = None
+            synth_chunks = [
+                AudioChunk(chunk_id=i, start_time=seg.start, end_time=seg.end, file_path=str(wav_path))
+                for i, seg in enumerate(result.segments)
+            ]
+            chunk_role = self.diarizer.diarize(wav_path, synth_chunks)
 
-        for seg_idx, (wav_path, offset) in enumerate(segments):
-            seg_session_id = session_id if len(segments) == 1 else f"{session_id}::seg{seg_idx}"
-            now = datetime.utcnow().isoformat()
-
-            job = None
-            skip_submit = False
-            prior = sarvam_job_store.get(seg_session_id)
-            if prior and prior.get("sarvam_job_id"):
-                live_state = sarvam_batch.resolve_existing_job_state(prior["sarvam_job_id"])
-                if live_state == "Completed":
-                    logger.info(f"[STT] session={seg_session_id} job={prior['sarvam_job_id']} "
-                                f"already Completed — resuming without resubmission")
-                    if self.p: self.p.log(f"Sarvam job {prior['sarvam_job_id']} already completed — "
-                                           f"reusing (no resubmission, no re-pay)")
-                    job = sarvam_batch.get_job_handle(prior["sarvam_job_id"])
-                    skip_submit = True
-                elif live_state in ("Accepted", "Pending", "Running"):
-                    logger.info(f"[STT] session={seg_session_id} job={prior['sarvam_job_id']} "
-                                f"still {live_state} — resuming poll without resubmission")
-                    if self.p: self.p.log(f"Sarvam job {prior['sarvam_job_id']} still {live_state} — "
-                                           f"resuming poll (no resubmission)")
-                    job = sarvam_batch.get_job_handle(prior["sarvam_job_id"])
-                    skip_submit = True
-                    sarvam_job_store.update_status(seg_session_id, "started", now=now)
-
-            if not skip_submit:
-                seg_duration = self.processor.get_duration(wav_path)
-                try:
-                    job = sarvam_batch.submit_job(wav_path)
-                except Exception as exc:
-                    logger.error(f"[STT] session={seg_session_id} initialise failed: {exc}")
-                    sarvam_job_store.upsert_submitted(seg_session_id, "", str(wav_path), seg_duration,
-                                                       len(segments), now)
-                    sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc), now=now)
-                    raise sarvam_batch.SttJobFailedError(f"Sarvam job initialisation failed: {exc}") from exc
-
-                sarvam_job_store.upsert_submitted(seg_session_id, job.job_id, str(wav_path),
-                                                   seg_duration, len(segments), now)
-                logger.info(f"[STT] session={seg_session_id} job={job.job_id} submitted "
-                            f"(duration={seg_duration:.0f}s)")
-                if self.p: self.p.log(f"Sarvam Batch STT → Job submitted (job_id={job.job_id})")
-
-                try:
-                    sarvam_batch.upload_and_start(job, wav_path)
-                    sarvam_job_store.update_status(seg_session_id, "started",
-                                                    now=datetime.utcnow().isoformat())
-                except Exception as exc:
-                    logger.error(f"[STT] session={seg_session_id} job={job.job_id} upload/start failed: {exc}")
-                    sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
-                                                    now=datetime.utcnow().isoformat())
-                    raise sarvam_batch.SttJobFailedError(
-                        f"Sarvam upload/start failed for job {job.job_id}: {exc}") from exc
-
-            if self.p: self.p.log("Sarvam Batch STT → Processing")
-
-            def _on_poll(status, _sid=seg_session_id):
-                sarvam_job_store.update_status(_sid, "polling", now=datetime.utcnow().isoformat())
-                logger.info(f"[STT] session={_sid} job={status.job_id} status={status.job_state} "
-                            f"total_files={getattr(status, 'total_files', None)} "
-                            f"ok={getattr(status, 'successful_files_count', None)} "
-                            f"failed={getattr(status, 'failed_files_count', None)}")
-
-            def _is_cancelled(_sid=seg_session_id):
-                return sarvam_job_store.is_cancel_requested(_sid)
-
-            try:
-                final_state = sarvam_batch.poll_with_backoff(
-                    job, seg_session_id, on_status=_on_poll, is_cancelled=_is_cancelled)
-            except sarvam_batch.SttJobFailedError as exc:
-                sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
-                                                now=datetime.utcnow().isoformat())
-                logger.error(f"[STT] session={seg_session_id} timed out waiting on Sarvam: {exc}")
-                raise
-
-            if final_state == "Cancelled":
-                sarvam_job_store.update_status(seg_session_id, "cancelled",
-                                                now=datetime.utcnow().isoformat())
-                logger.info(f"[STT] session={seg_session_id} cancelled — job {job.job_id} "
-                            f"keeps running on Sarvam's side; Resume will pick up its result")
-                if self.p: self.p.log("Transcription cancelled")
-                raise sarvam_batch.SttJobFailedError(f"Cancelled by user (job {job.job_id} still running on Sarvam)")
-
-            if final_state == "Failed":
-                try:
-                    file_results = job.get_file_results()
-                    err = "; ".join(
-                        (f.get("error_message") or "unknown error") for f in file_results.get("failed", [])
-                    ) or "Sarvam job failed"
-                except Exception:
-                    err = "Sarvam job failed"
-                sarvam_job_store.update_status(seg_session_id, "stt_failed", err,
-                                                now=datetime.utcnow().isoformat())
-                logger.error(f"[STT] session={seg_session_id} job={job.job_id} failed: {err}")
-                raise sarvam_batch.SttJobFailedError(f"Sarvam job {job.job_id} failed: {err}")
-
-            if self.p: self.p.log("Sarvam Batch STT → Completed")
-
-            out_dir = wav_path.parent / "sarvam_batch_out"
-            try:
-                result = sarvam_batch.download_and_parse(job, wav_path, out_dir)
-            except sarvam_batch.SttJobFailedError as exc:
-                sarvam_job_store.update_status(seg_session_id, "stt_failed", str(exc),
-                                                now=datetime.utcnow().isoformat())
-                logger.error(f"[STT] session={seg_session_id} job={job.job_id} download/parse failed: {exc}")
-                raise
-
-            sarvam_job_store.update_status(seg_session_id, "completed",
-                                            now=datetime.utcnow().isoformat())
-            logger.info(f"[STT] session={seg_session_id} job={job.job_id} completed "
-                        f"({len(result.segments)} segments, diarized={result.has_diarization})")
-            if self.p: self.p.log(f"Sarvam Batch STT → Transcript ready "
-                                   f"({len(result.segments)} segments, diarized={result.has_diarization})")
-
-            # ── Speaker role assignment ──────────────────────────────────────
-            chunk_role = None
-            if result.has_diarization:
-                durations: dict[str, float] = {}
-                for seg in result.segments:
-                    durations[seg.speaker_id] = durations.get(seg.speaker_id, 0.0) + max(0.0, seg.end - seg.start)
-                role_map = assign_roles_by_talktime(durations)
-            else:
-                # Fallback: existing acoustic diarizer (stereo/mono-energy),
-                # run directly against the segment wav using the timestamped
-                # -chunk boundaries as its "chunks" input — no physical
-                # re-splitting needed (read_wav_rms reads time ranges
-                # directly from the file).
-                role_map = None
-                synth_chunks = [
-                    AudioChunk(chunk_id=i, start_time=seg.start, end_time=seg.end, file_path=str(wav_path))
-                    for i, seg in enumerate(result.segments)
-                ]
-                chunk_role = self.diarizer.diarize(wav_path, synth_chunks)
-
-            for i, seg in enumerate(result.segments):
-                speaker = (role_map.get(seg.speaker_id, Speaker.UNKNOWN) if role_map is not None
-                           else chunk_role.get(i, Speaker.UNKNOWN))
-                language_detected = result.language_code if result.language_code != "unknown" else "en-IN"
-                english_text = (
-                    seg.text if language_detected.startswith("en")
-                    else self.stt._translate_to_english(seg.text, language_detected)
-                )
-                all_utterances.append(Utterance(
-                    utterance_id=str(uuid.uuid4()),
-                    speaker=speaker,
-                    start_time=round(seg.start + offset, 3),
-                    end_time=round(seg.end + offset, 3),
-                    native_text=seg.text,
-                    english_text=english_text,
-                    language_detected=language_detected,
-                    confidence=1.0,
-                ))
-
-        return sorted(all_utterances, key=lambda u: u.start_time)
+        utterances: list[Utterance] = []
+        for i, seg in enumerate(result.segments):
+            speaker = (role_map.get(seg.speaker_id, Speaker.UNKNOWN) if role_map is not None
+                       else chunk_role.get(i, Speaker.UNKNOWN))
+            language_detected = result.language_code if result.language_code != "unknown" else "en-IN"
+            english_text = (
+                seg.text if language_detected.startswith("en")
+                else self.stt._translate_to_english(seg.text, language_detected)
+            )
+            utterances.append(Utterance(
+                utterance_id=str(uuid.uuid4()),
+                speaker=speaker,
+                start_time=round(seg.start + offset, 3),
+                end_time=round(seg.end + offset, 3),
+                native_text=seg.text,
+                english_text=english_text,
+                language_detected=language_detected,
+                confidence=1.0,
+            ))
+        return utterances
 
     # ── Parallel STT (legacy — 28s-chunk path, kept for transcription/stt.py's
     # per-chunk cascade; no longer called by run() by default, see _batch_stt) ──

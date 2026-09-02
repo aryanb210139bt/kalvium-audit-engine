@@ -147,19 +147,35 @@ JOB_QUEUE = [
 
 SARVAM_STT_JOBS = [
     """CREATE TABLE IF NOT EXISTS sarvam_stt_jobs (
-        session_id       TEXT PRIMARY KEY,
-        sarvam_job_id    TEXT DEFAULT '',
-        status           TEXT NOT NULL DEFAULT 'submitted',
-        wav_path         TEXT DEFAULT '',
-        duration_seconds DOUBLE PRECISION,
-        num_segments     INTEGER DEFAULT 1,
-        retry_count      INTEGER DEFAULT 0,
-        error_message    TEXT DEFAULT '',
-        cancel_requested INTEGER NOT NULL DEFAULT 0,
-        created_at       TEXT,
-        updated_at       TEXT
+        session_id        TEXT PRIMARY KEY,
+        parent_session_id TEXT DEFAULT '',
+        segment_index     INTEGER DEFAULT 0,
+        sarvam_job_id     TEXT DEFAULT '',
+        status            TEXT NOT NULL DEFAULT 'submitted',
+        wav_path          TEXT DEFAULT '',
+        duration_seconds  DOUBLE PRECISION,
+        num_segments      INTEGER DEFAULT 1,
+        retry_count       INTEGER DEFAULT 0,
+        error_message     TEXT DEFAULT '',
+        transcript_json   TEXT DEFAULT '',
+        cancel_requested  INTEGER NOT NULL DEFAULT 0,
+        created_at        TEXT,
+        updated_at        TEXT
     )""",
     "CREATE INDEX IF NOT EXISTS idx_sarvam_jobs_status ON sarvam_stt_jobs(status)",
+    # Backward-compatible migration: this table already existed in production
+    # (from the initial Batch STT deploy) before parent_session_id/
+    # segment_index/transcript_json existed — CREATE TABLE IF NOT EXISTS
+    # above is a no-op against that existing table, so these columns must be
+    # added explicitly, and BEFORE the index below that depends on one of
+    # them (confirmed live: without this ordering, apply_schema against the
+    # real production table fails with psycopg.errors.UndefinedColumn since
+    # the index statement ran first). No-ops harmlessly on a brand-new table
+    # too, since CREATE TABLE already included them there.
+    "ALTER TABLE sarvam_stt_jobs ADD COLUMN IF NOT EXISTS parent_session_id TEXT DEFAULT ''",
+    "ALTER TABLE sarvam_stt_jobs ADD COLUMN IF NOT EXISTS segment_index INTEGER DEFAULT 0",
+    "ALTER TABLE sarvam_stt_jobs ADD COLUMN IF NOT EXISTS transcript_json TEXT DEFAULT ''",
+    "CREATE INDEX IF NOT EXISTS idx_sarvam_jobs_parent ON sarvam_stt_jobs(parent_session_id)",
 ]
 
 VIDEO_AUDITS = [

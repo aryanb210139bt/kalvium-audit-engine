@@ -16,8 +16,10 @@ ML models, e.g. XLM-RoBERTa sentiment) — _batch_stt only touches
 self.p/self.processor/self.stt/self.diarizer, so a lightweight stand-in
 with just those four attributes is enough and keeps this test fast.
 """
+import json
 import sys
 import threading
+import types
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -43,7 +45,18 @@ class _FakeSTT:
 
 
 def _pipeline_stub():
-    return SimpleNamespace(p=None, processor=AudioProcessor(), stt=_FakeSTT(), diarizer=Diarizer())
+    """
+    A lightweight stand-in for DemoAuditPipelineV3 (avoids constructing the
+    real class, whose __init__ loads heavy ML models). _batch_stt now
+    delegates to two sibling methods (_process_segment,
+    _utterances_from_result) via `self.` — bind them onto the stub too via
+    types.MethodType so `self._process_segment(...)` resolves the same way
+    it would on a real instance.
+    """
+    stub = SimpleNamespace(p=None, processor=AudioProcessor(), stt=_FakeSTT(), diarizer=Diarizer())
+    stub._process_segment = types.MethodType(pipeline_v3.DemoAuditPipelineV3._process_segment, stub)
+    stub._utterances_from_result = types.MethodType(pipeline_v3.DemoAuditPipelineV3._utterances_from_result, stub)
+    return stub
 
 
 class _FakeJobHandle:
@@ -194,6 +207,125 @@ def test_batch_stt_raises_and_marks_stt_failed_on_terminal_failure(tmp_path, mon
     row = sarvam_job_store.get("session-1")
     assert row["status"] == "stt_failed"
     assert "bad audio codec" in row["error_message"]
+
+
+def test_batch_stt_multi_segment_processes_all_and_merges_sorted(tmp_path, monkeypatch):
+    """N=4 here is illustrative only — the same code path must hold for any N
+    (see test_sarvam_job_store.py's N=10/N=1000 test for the store layer)."""
+    _fresh_job_store(tmp_path, monkeypatch)
+    wav_paths = [tmp_path / f"seg{i}.wav" for i in range(4)]
+    for p in wav_paths:
+        p.write_bytes(b"x")
+
+    def _fake_submit(path):
+        return _FakeJobHandle(f"job-{path.stem}")
+
+    monkeypatch.setattr(sarvam_batch, "submit_job", _fake_submit)
+    monkeypatch.setattr(sarvam_batch, "upload_and_start", lambda job, path: None)
+    monkeypatch.setattr(sarvam_batch, "poll_with_backoff",
+                         lambda job, sid, on_status=None, is_cancelled=None: "Completed")
+
+    def _fake_download(job, path, out_dir):
+        # Each segment's single utterance start time encodes which segment
+        # it is, so we can verify the final merge/sort is correct.
+        idx = int(path.stem.replace("seg", ""))
+        return sarvam_batch.BatchTranscriptResult(
+            transcript="x", language_code="en-IN", has_diarization=True,
+            segments=[sarvam_batch.DiarizedSegment(text=f"seg{idx}", start=0.0, end=1.0, speaker_id="0")],
+        )
+    monkeypatch.setattr(sarvam_batch, "download_and_parse", _fake_download)
+
+    # Segments given with DEscending time offsets — final utterances must
+    # still come back sorted by actual (offset-adjusted) start_time, proving
+    # the merge doesn't just preserve processing/completion order.
+    segments = [(wav_paths[i], float(3 - i) * 100) for i in range(4)]
+    utterances = pipeline_v3.DemoAuditPipelineV3._batch_stt(_pipeline_stub(), "parent-1", segments)
+
+    assert len(utterances) == 4
+    starts = [u.start_time for u in utterances]
+    assert starts == sorted(starts)
+
+    progress = sarvam_job_store.segment_progress("parent-1")
+    assert progress["total_segments"] == 4
+    assert progress["completed"] == 4
+    assert progress["failed"] == 0
+
+
+def test_batch_stt_multi_segment_skips_sarvam_entirely_for_cached_segment(tmp_path, monkeypatch):
+    _fresh_job_store(tmp_path, monkeypatch)
+    wav_paths = [tmp_path / f"seg{i}.wav" for i in range(2)]
+    for p in wav_paths:
+        p.write_bytes(b"x")
+
+    # Pre-populate segment 0 as already completed with a cached transcript —
+    # simulates a resume after segment 0 succeeded on a prior (interrupted) run.
+    sarvam_job_store.create_pending_segments("parent-1", [str(p) for p in wav_paths], now="t0")
+    sarvam_job_store.upsert_submitted("parent-1::seg0", "old-job-0", str(wav_paths[0]), 100.0, 2, now="t0")
+    sarvam_job_store.save_transcript(
+        "parent-1::seg0",
+        json.dumps({
+            "transcript": "cached", "language_code": "en-IN", "has_diarization": True,
+            "segments": [{"text": "cached text", "start": 0.0, "end": 1.0, "speaker_id": "0"}],
+        }),
+        now="t1",
+    )
+
+    calls = {"submit_job": 0, "resolve_existing_job_state": 0}
+    monkeypatch.setattr(sarvam_batch, "submit_job",
+                         lambda path: calls.__setitem__("submit_job", calls["submit_job"] + 1) or _FakeJobHandle("new-job"))
+    monkeypatch.setattr(sarvam_batch, "resolve_existing_job_state",
+                         lambda job_id: calls.__setitem__("resolve_existing_job_state", calls["resolve_existing_job_state"] + 1) or "Completed")
+    monkeypatch.setattr(sarvam_batch, "upload_and_start", lambda job, path: None)
+    monkeypatch.setattr(sarvam_batch, "poll_with_backoff",
+                         lambda job, sid, on_status=None, is_cancelled=None: "Completed")
+    monkeypatch.setattr(sarvam_batch, "download_and_parse", lambda job, path, out_dir: sarvam_batch.BatchTranscriptResult(
+        transcript="fresh", language_code="en-IN", has_diarization=True,
+        segments=[sarvam_batch.DiarizedSegment(text="fresh text", start=0.0, end=1.0, speaker_id="0")],
+    ))
+
+    utterances = pipeline_v3.DemoAuditPipelineV3._batch_stt(
+        _pipeline_stub(), "parent-1", [(wav_paths[0], 0.0), (wav_paths[1], 1000.0)])
+
+    texts = {u.native_text for u in utterances}
+    assert "cached text" in texts     # segment 0 came from cache
+    assert "fresh text" in texts      # segment 1 was actually processed
+    # Segment 0's cached path never called submit_job or even a status check.
+    assert calls["submit_job"] == 1          # only for segment 1
+    assert calls["resolve_existing_job_state"] == 0   # cache short-circuit skips this check entirely
+
+
+def test_batch_stt_multi_segment_one_failure_does_not_stop_others(tmp_path, monkeypatch):
+    _fresh_job_store(tmp_path, monkeypatch)
+    wav_paths = [tmp_path / f"seg{i}.wav" for i in range(3)]
+    for p in wav_paths:
+        p.write_bytes(b"x")
+
+    monkeypatch.setattr(sarvam_batch, "submit_job", lambda path: _FakeJobHandle(f"job-{path.stem}"))
+    monkeypatch.setattr(sarvam_batch, "upload_and_start", lambda job, path: None)
+
+    def _fake_poll(job, sid, on_status=None, is_cancelled=None):
+        return "Failed" if "seg1" in sid else "Completed"
+    monkeypatch.setattr(sarvam_batch, "poll_with_backoff", _fake_poll)
+
+    fail_job = _FakeJobHandle("job-seg1")
+    fail_job.get_file_results = lambda: {"failed": [{"error_message": "bad audio"}]}
+    monkeypatch.setattr(sarvam_batch, "submit_job",
+                         lambda path: fail_job if "seg1" in path.stem else _FakeJobHandle(f"job-{path.stem}"))
+    monkeypatch.setattr(sarvam_batch, "download_and_parse", lambda job, path, out_dir: sarvam_batch.BatchTranscriptResult(
+        transcript="ok", language_code="en-IN", has_diarization=True,
+        segments=[sarvam_batch.DiarizedSegment(text="ok", start=0.0, end=1.0, speaker_id="0")],
+    ))
+
+    try:
+        pipeline_v3.DemoAuditPipelineV3._batch_stt(
+            _pipeline_stub(), "parent-1", [(wav_paths[i], float(i) * 100) for i in range(3)])
+        assert False, "expected SttJobFailedError"
+    except sarvam_batch.SttJobFailedError as exc:
+        assert "1/3 segment(s) failed" in str(exc)
+
+    progress = sarvam_job_store.segment_progress("parent-1")
+    assert progress["completed"] == 2   # segments 0 and 2 still succeeded
+    assert progress["failed"] == 1      # only segment 1
 
 
 def test_batch_stt_marks_cancelled_on_cooperative_cancel(tmp_path, monkeypatch):
