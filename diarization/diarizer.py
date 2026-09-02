@@ -32,6 +32,26 @@ TURN_SILENCE_SEC  = 0.5
 FRAME_SEC         = 0.2
 
 
+def assign_roles_by_talktime(durations: dict[str, float]) -> dict[str, Speaker]:
+    """
+    Map anonymous speaker labels (pyannote's "SPEAKER_00"/"SPEAKER_01"-style
+    strings, or Sarvam Batch STT's numeric diarized_transcript speaker_id
+    strings "0"/"1"/"2") to Counsellor/Student/Parent roles.
+
+    This is the app's existing speaker-identification heuristic (previously
+    inline in _diarize_pyannote only): the speaker who talks the most in a
+    KNET-style demo/sales call is overwhelmingly the counsellor running the
+    session, the second-most is the student, and a third participant (when
+    present) is the parent. Anything beyond 3 distinct speakers is UNKNOWN
+    rather than guessed. Reused as-is (not reimplemented) for Sarvam's Batch
+    API diarization output — see transcription/sarvam_batch.py.
+    """
+    ranked = sorted(durations, key=durations.__getitem__, reverse=True)
+    roles  = [Speaker.COUNSELLOR, Speaker.STUDENT, Speaker.PARENT]
+    return {spk: roles[i] if i < len(roles) else Speaker.UNKNOWN
+            for i, spk in enumerate(ranked)}
+
+
 class Diarizer:
 
     def diarize(self, wav_path: Path, chunks: list[AudioChunk]) -> dict[int, Speaker]:
@@ -197,10 +217,7 @@ class Diarizer:
         durations: dict[str, float] = {}
         for turn, _, spk in dia.itertracks(yield_label=True):
             durations[spk] = durations.get(spk, 0) + turn.duration
-        ranked  = sorted(durations, key=durations.__getitem__, reverse=True)
-        roles   = [Speaker.COUNSELLOR, Speaker.STUDENT, Speaker.PARENT]
-        role_map = {s: roles[i] if i < len(roles) else Speaker.UNKNOWN
-                    for i, s in enumerate(ranked)}
+        role_map = assign_roles_by_talktime(durations)
 
         result: dict[int, Speaker] = {}
         for chunk in chunks:

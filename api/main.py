@@ -127,6 +127,21 @@ _recovered = job_queue.recover_orphaned()
 if _recovered:
     logger.info(f"Recovered {_recovered} job(s) orphaned by a previous restart — reset to 'queued'")
 
+# Sarvam Batch STT job records — see transcription/sarvam_job_store.py.
+# Mirrors job_queue's own recover_orphaned pattern: any job stuck
+# submitted/uploaded/started/polling at this point had its poller thread
+# killed by the restart. Marking it 'interrupted' (rather than leaving it
+# silently stuck) is what a Resume/Retry checks against — it re-verifies
+# the stored sarvam_job_id's *live* status on Sarvam's side before ever
+# resubmitting, so an interrupted-but-actually-finished job is never
+# retranscribed.
+from transcription import sarvam_job_store
+sarvam_job_store.init_db()
+_sarvam_recovered = sarvam_job_store.recover_orphaned(datetime.utcnow().isoformat())
+if _sarvam_recovered:
+    logger.info(f"Marked {_sarvam_recovered} Sarvam Batch STT job(s) 'interrupted' by a previous "
+                f"restart — Resume will re-check their live status before resubmitting")
+
 # ── Database backend startup check (sqlite | postgres) ───────────────────────
 # Never logs DATABASE_URL — only the backend name and a fixed, generic
 # connectivity message. See db/backend.py, db/pg.py.
@@ -646,9 +661,18 @@ async def remove_queued_job(job_id: str):
 
 @app.post("/api/v1/queue/{job_id}/retry")
 async def retry_queued_job(job_id: str):
-    """Re-queues a failed job using its originally stored payload — no
-    re-upload needed. Full re-run only (no partial-resume of a previously
-    successful preprocessing stage exists yet)."""
+    """
+    Re-queues a failed job using its originally stored payload — no
+    re-upload needed. The re-run still goes through the same FFmpeg
+    conversion step (cheap), but the Sarvam Batch STT step
+    (pipeline_v3._batch_stt) is smart-resume-aware: if
+    transcription.sarvam_job_store has a job_id already recorded for this
+    session, it live-checks that job's actual status on Sarvam's side
+    before ever submitting a new one. So if the previous attempt's Sarvam
+    job already completed (or is still running), this retry does NOT
+    re-pay for/resubmit a fresh transcription — it downloads/resumes the
+    existing one.
+    """
     ok = job_queue.retry(job_id, datetime.utcnow().isoformat())
     if not ok:
         raise HTTPException(400, "Job not in a failed state")
@@ -659,14 +683,22 @@ async def retry_queued_job(job_id: str):
 async def cancel_processing_job(job_id: str, actor: str = ""):
     """
     Soft-cancel a 'starting'/'processing' job — hides it from Upfront
-    Auditing immediately. Does NOT stop the background pipeline thread (no
-    safe way to interrupt mid-transcription without touching the protected
-    audit/STT pipeline), so it may still complete and land in Audit
-    History/the tracker later — this only removes it from view here.
+    Auditing immediately. Also sets the cooperative cancel flag in
+    sarvam_job_store (checked between polls by
+    transcription.sarvam_batch.poll_with_backoff) so a job currently
+    waiting on Sarvam Batch STT stops polling promptly rather than running
+    until Sarvam's own job finishes. Does NOT kill the Sarvam job itself
+    (no such API) or forcibly stop the background pipeline thread if it's
+    past the STT step — it may still complete and land in Audit
+    History/the tracker later; this reliably stops *new* polling/waiting
+    and removes it from view here. A later Resume/Retry picks up the
+    cancelled job's real status rather than resubmitting.
     """
     ok = job_queue.cancel(job_id, datetime.utcnow().isoformat())
     if not ok:
         raise HTTPException(400, "Job not in a cancellable state")
+    from transcription import sarvam_job_store
+    sarvam_job_store.request_cancel(job_id, datetime.utcnow().isoformat())
     job = job_queue.get(job_id)
     if job:
         activity_log.log_event("audit_cancelled", session_id=job_id, associate=job.get("label", ""),
@@ -1025,6 +1057,32 @@ async def get_result(session_id: str):
     raise HTTPException(404, "Session not found — may have been cleared from memory")
 
 
+@app.get("/api/v1/audit/{session_id}/stt-status")
+async def get_stt_status(session_id: str):
+    """
+    Durable Sarvam Batch STT job status for this session — backed by
+    transcription/sarvam_job_store (survives a browser refresh AND a
+    server restart, unlike the WebSocket-only progress stream). Returns
+    404 only if no Batch STT job was ever submitted for this session
+    (e.g. it hasn't reached Step 3 yet, or it ran from a pasted transcript
+    which skips STT entirely).
+    """
+    from transcription import sarvam_job_store
+    job = sarvam_job_store.get(session_id)
+    if not job:
+        raise HTTPException(404, "No Sarvam Batch STT job recorded for this session")
+    return {
+        "session_id": session_id,
+        "sarvam_job_id": job["sarvam_job_id"],
+        "status": job["status"],
+        "stage": sarvam_job_store.stage_label(job["status"]),
+        "retry_count": job["retry_count"],
+        "num_segments": job["num_segments"],
+        "error_message": job["error_message"] or None,
+        "updated_at": job["updated_at"],
+    }
+
+
 @app.get("/api/v1/audit/{session_id}/participation")
 async def get_participation(session_id: str):
     s = _sessions.get(session_id)
@@ -1219,6 +1277,7 @@ async def ws_progress(ws: WebSocket, session_id: str):
 
 def _run_pipeline(session_id: str, recording_path: Path, tracker) -> None:
     from pipeline_v3 import DemoAuditPipelineV3
+    from transcription.sarvam_batch import SttJobFailedError
     # Marks the moment a worker thread actually begins running this job —
     # not when Start was clicked. This is what makes "Start All" respect
     # existing concurrency: a job still waiting behind others in the
@@ -1230,7 +1289,7 @@ def _run_pipeline(session_id: str, recording_path: Path, tracker) -> None:
     try:
         _sessions[session_id]["status"] = "processing"
         pipeline = DemoAuditPipelineV3(progress=tracker)
-        report_dict = pipeline.run(recording_path)
+        report_dict = pipeline.run(recording_path, session_id=session_id)
         _sessions[session_id].update({
             "status": "completed",
             "completed_at": datetime.utcnow().isoformat(),
@@ -1239,6 +1298,20 @@ def _run_pipeline(session_id: str, recording_path: Path, tracker) -> None:
         _add_to_history(session_id, _sessions[session_id])
         job_queue.mark_completed(session_id, datetime.utcnow().isoformat())
         logger.info(f"Session {session_id} complete — {report_dict['score']['overall']}/100")
+    except SttJobFailedError as exc:
+        # Distinct from a generic pipeline failure: the audio was already
+        # converted and a Sarvam Batch STT job was already submitted (and
+        # possibly ran for a while) — that cost/progress must not be
+        # silently discarded. _sessions["stt_failed"]=True tells the URL
+        # -flow callers to skip _cleanup_upload_dir so the already
+        # -converted WAV survives for a Retry (see job_queue.retry() +
+        # pipeline_v3._batch_stt's smart-resume, which checks the stored
+        # Sarvam job_id's live status before ever resubmitting).
+        logger.error(f"STT_FAILED for {session_id}: {exc}")
+        _sessions[session_id].update({"status": "failed", "error": f"STT_FAILED: {exc}", "stt_failed": True})
+        _log_audit_failed(session_id, _sessions[session_id], f"STT_FAILED: {exc}")
+        job_queue.mark_failed(session_id, f"STT_FAILED: {exc}", datetime.utcnow().isoformat())
+        tracker.error(f"STT_FAILED: {str(exc)[:300]}")
     except Exception as exc:
         logger.exception(f"Pipeline failed for {session_id}: {exc}")
         _sessions[session_id].update({"status": "failed", "error": str(exc)})
@@ -1434,7 +1507,11 @@ def _run_url_pipeline(session_id: str, url: str, upload_dir: Path, tracker) -> N
         job_queue.mark_failed(session_id, str(exc), datetime.utcnow().isoformat())
         tracker.error(f"Download failed: {str(exc)[:200]}")
     finally:
-        _cleanup_upload_dir(upload_dir)
+        # Skip cleanup on an STT failure — the already-downloaded/converted
+        # audio must survive so a Retry can resubmit to Sarvam (or just
+        # re-check the already-submitted job) without redoing the download.
+        if not _sessions.get(session_id, {}).get("stt_failed"):
+            _cleanup_upload_dir(upload_dir)
 
 
 def _run_url_pipeline_audio(session_id: str, url: str, upload_dir: Path, tracker) -> None:
@@ -1465,7 +1542,10 @@ def _run_url_pipeline_audio(session_id: str, url: str, upload_dir: Path, tracker
         job_queue.mark_failed(session_id, str(exc), datetime.utcnow().isoformat())
         tracker.error(f"Failed: {str(exc)[:300]}")
     finally:
-        _cleanup_upload_dir(upload_dir)
+        # See _run_url_pipeline's matching comment — preserve the audio on
+        # an STT failure so Retry doesn't need to redo the FFmpeg extraction.
+        if not _sessions.get(session_id, {}).get("stt_failed"):
+            _cleanup_upload_dir(upload_dir)
 
 
 def _cleanup_upload_dir(upload_dir: Path) -> None:

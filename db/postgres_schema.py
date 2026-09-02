@@ -145,6 +145,23 @@ JOB_QUEUE = [
     "CREATE INDEX IF NOT EXISTS idx_queued_jobs_order ON queued_jobs(order_index)",
 ]
 
+SARVAM_STT_JOBS = [
+    """CREATE TABLE IF NOT EXISTS sarvam_stt_jobs (
+        session_id       TEXT PRIMARY KEY,
+        sarvam_job_id    TEXT DEFAULT '',
+        status           TEXT NOT NULL DEFAULT 'submitted',
+        wav_path         TEXT DEFAULT '',
+        duration_seconds DOUBLE PRECISION,
+        num_segments     INTEGER DEFAULT 1,
+        retry_count      INTEGER DEFAULT 0,
+        error_message    TEXT DEFAULT '',
+        cancel_requested INTEGER NOT NULL DEFAULT 0,
+        created_at       TEXT,
+        updated_at       TEXT
+    )""",
+    "CREATE INDEX IF NOT EXISTS idx_sarvam_jobs_status ON sarvam_stt_jobs(status)",
+]
+
 VIDEO_AUDITS = [
     """CREATE TABLE IF NOT EXISTS video_audits (
         id                 TEXT PRIMARY KEY,
@@ -262,6 +279,7 @@ SCHEMA_DDL = [
     ("activity_log", ACTIVITY_LOG),
     ("associate_roster", ASSOCIATE_ROSTER),
     ("job_queue", JOB_QUEUE),
+    ("sarvam_stt_jobs", SARVAM_STT_JOBS),
     ("video_audits", VIDEO_AUDITS),
     ("deck", DECK),
 ]

@@ -17,8 +17,8 @@ class ProgressTracker:
 
     STEPS = {
         1: "Audio Conversion",
-        2: "Silence Chunking",
-        3: "Transcription (Sarvam AI)",
+        2: "Batch Segmentation",
+        3: "Sarvam Batch STT",
         4: "Speaker Labeling",
         5: "Event Detection",
         6: "GPT-4o Audit",

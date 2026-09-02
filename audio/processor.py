@@ -21,12 +21,45 @@ CHUNK_MAX_SEC = 28      # Sarvam AI limit is 30s; 28s gives 2s headroom
 CHUNK_MIN_SEC = 8       # Merge chunks shorter than this
 
 
+# Sarvam Batch STT's documented hard limit is 2h/file; BATCH_MAX_SEC (see
+# transcription/sarvam_batch.BATCH_MAX_SECONDS, kept in one place there)
+# leaves a safety margin. split_for_batch() below reuses the exact same
+# proven ffmpeg segment mechanism as _split_chunks(), just parameterised —
+# no new splitting logic, only a different segment length.
+
 class AudioProcessor:
 
     def process(self, recording_path: Path) -> tuple[Path, list[AudioChunk]]:
+        """
+        Legacy path: WAV conversion + hundreds of <=28s chunks for the old
+        per-chunk Sarvam calls (transcription/stt.py). No longer called by
+        pipeline_v3's default flow (see to_wav/split_for_batch below), kept
+        intact and still covered by tests per the "don't remove until the
+        new implementation is verified" constraint.
+        """
         wav_path = self._convert_to_wav(recording_path)
         chunks   = self._split_chunks(wav_path)
         return wav_path, chunks
+
+    def to_wav(self, recording_path: Path) -> Path:
+        """
+        Batch STT path: convert to 16kHz WAV only — no chunking. The whole
+        file is handed to Sarvam's Batch API as a single job (or split into
+        <=~2h segments by split_for_batch, only for recordings that exceed
+        the Batch API's per-file limit).
+        """
+        return self._convert_to_wav(recording_path)
+
+    def split_for_batch(self, wav_path: Path, max_seconds: float) -> list[AudioChunk]:
+        """
+        Only used for recordings longer than the Batch API's per-file limit
+        (~2h). Splits into the fewest possible <=max_seconds segments (e.g.
+        2 segments for a 3-hour file), each becoming its own Batch STT job
+        in pipeline_v3._batch_stt. Reuses _split_chunks' exact ffmpeg
+        segment/reset_timestamps mechanism — only the segment length
+        differs from the legacy 28s chunking.
+        """
+        return self._split_chunks(wav_path, max_sec=max_seconds, subdir="batch_segments")
 
     def get_duration(self, wav_path: Path) -> float:
         return _ffprobe_duration(wav_path)
@@ -69,19 +102,23 @@ class AudioProcessor:
 
     # ── Chunking ───────────────────────────────────────────────────────────────
 
-    def _split_chunks(self, wav_path: Path) -> list[AudioChunk]:
+    def _split_chunks(self, wav_path: Path, max_sec: float = CHUNK_MAX_SEC,
+                       subdir: str = "chunks") -> list[AudioChunk]:
         """
-        Split WAV into ≤CHUNK_MAX_SEC mono chunks using ffmpeg segment filter.
-        Each chunk is exported as a separate mono WAV for STT.
+        Split WAV into <=max_sec mono chunks using ffmpeg segment filter.
+        Each chunk is exported as a separate mono WAV. Default max_sec/subdir
+        preserve the original <=28s legacy chunking behavior exactly;
+        split_for_batch() reuses this with a ~2h max_sec for the rare
+        >2h-recording Batch STT case instead.
         """
-        chunk_dir = wav_path.parent / "chunks"
+        chunk_dir = wav_path.parent / subdir
         chunk_dir.mkdir(exist_ok=True)
 
         duration = _ffprobe_duration(wav_path)
         if duration <= 0:
             raise RuntimeError(f"Could not determine audio duration: {wav_path}")
 
-        logger.info(f"  Audio duration: {duration:.1f}s, splitting into ≤{CHUNK_MAX_SEC}s chunks")
+        logger.info(f"  Audio duration: {duration:.1f}s, splitting into ≤{max_sec:.0f}s chunks")
 
         # Use ffmpeg segment to split — forces mono output for STT compatibility
         pattern = str(chunk_dir / "chunk_%04d.wav")
@@ -90,7 +127,7 @@ class AudioProcessor:
             "-ac", "1",                          # mono for STT
             "-ar", str(TARGET_SR),
             "-f", "segment",
-            "-segment_time", str(CHUNK_MAX_SEC),
+            "-segment_time", str(max_sec),
             "-reset_timestamps", "1",
             "-c:a", "pcm_s16le",
             pattern,

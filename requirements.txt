@@ -27,6 +27,15 @@ openai-whisper>=20231117
 requests>=2.31.0
 httpx>=0.27.0
 
+# Sarvam AI official SDK — used ONLY for the Batch Speech-to-Text job
+# lifecycle (transcription/sarvam_batch.py): initialise/upload/start/status/
+# download. Verified against the actual installed wheel's source (Fern-
+# generated client) on 2026-09-02 — every method name and field referenced
+# in that module exists in this exact version. The old synchronous
+# per-chunk /speech-to-text calls in transcription/stt.py still use raw
+# httpx directly and are unaffected.
+sarvamai>=0.1.31
+
 # Retry logic for the STT cascade (transcription/stt.py) — was installed
 # locally outside of requirements.txt tracking, missing here, which is
 # what broke every real audit on Render ("No module named 'tenacity'")

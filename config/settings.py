@@ -37,6 +37,18 @@ class Settings(BaseSettings):
     whisper_model_size: str = "large-v3"
     whisper_device: str = "cpu"   # "cpu" | "cuda"
 
+    # Sarvam Batch STT (transcription/sarvam_batch.py) — replaces the old
+    # per-30s-chunk synchronous calls for the main STT path. One async job
+    # per recording (or per split segment for >2h files) instead of
+    # hundreds of individual HTTP requests, so there's no per-chunk
+    # concurrency/timeout/retry knob to tune here — just the poll cadence
+    # for that one job, and how many speakers to expect for diarization.
+    sarvam_batch_num_speakers: int = 3          # Counsellor/Student/Parent
+    sarvam_batch_poll_initial_sec: int = 10     # first poll delay
+    sarvam_batch_poll_max_sec: int = 60         # backoff cap — never poll less often than this
+    sarvam_batch_poll_backoff: float = 1.6      # geometric backoff factor
+    sarvam_batch_poll_timeout_sec: int = 10800  # 3h ceiling before giving up (generous for a 2h file)
+
     # Diarization: "auto" | "pyannote" | "stereo" | "mock"
     diarization_provider: str = "auto"
     hf_token: str = ""   # HuggingFace token for Pyannote
