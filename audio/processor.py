@@ -17,8 +17,9 @@ from config.models import AudioChunk
 logger = logging.getLogger(__name__)
 
 TARGET_SR     = 16000
-CHUNK_MAX_SEC = 28      # Sarvam AI limit is 30s; 28s gives 2s headroom
-CHUNK_MIN_SEC = 8       # Merge chunks shorter than this
+CHUNK_MAX_SEC = 28      # Sarvam AI limit is 30s; 28s gives 2s headroom — now only
+                        # a _split_chunks() default; the one active caller
+                        # (split_for_batch) always passes its own max_seconds
 
 
 # Sarvam Batch STT's documented hard limit is 2h/file; BATCH_MAX_SEC (see
@@ -28,18 +29,6 @@ CHUNK_MIN_SEC = 8       # Merge chunks shorter than this
 # no new splitting logic, only a different segment length.
 
 class AudioProcessor:
-
-    def process(self, recording_path: Path) -> tuple[Path, list[AudioChunk]]:
-        """
-        Legacy path: WAV conversion + hundreds of <=28s chunks for the old
-        per-chunk Sarvam calls (transcription/stt.py). No longer called by
-        pipeline_v3's default flow (see to_wav/split_for_batch below), kept
-        intact and still covered by tests per the "don't remove until the
-        new implementation is verified" constraint.
-        """
-        wav_path = self._convert_to_wav(recording_path)
-        chunks   = self._split_chunks(wav_path)
-        return wav_path, chunks
 
     def to_wav(self, recording_path: Path) -> Path:
         """

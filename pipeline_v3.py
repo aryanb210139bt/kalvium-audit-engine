@@ -35,7 +35,6 @@ from scoring.scorer_v2 import ScoringEngineV2, CoachingGeneratorV2
 logger = logging.getLogger(__name__)
 settings = get_settings()
 
-STT_WORKERS   = 8
 AUDIT_WORKERS = 8
 
 
@@ -865,32 +864,6 @@ class DemoAuditPipelineV3:
             ))
         return utterances
 
-    # ── Parallel STT (legacy — 28s-chunk path, kept for transcription/stt.py's
-    # per-chunk cascade; no longer called by run() by default, see _batch_stt) ──
-
-    def _parallel_stt(self, chunks) -> list[Utterance]:
-        results: list[Utterance] = []
-        with ThreadPoolExecutor(max_workers=STT_WORKERS) as ex:
-            future_map = {
-                ex.submit(self.stt._transcribe_chunk, chunk, Speaker.UNKNOWN): chunk
-                for chunk in chunks
-            }
-            for future in as_completed(future_map):
-                chunk = future_map[future]
-                try:
-                    utt = future.result()
-                    if utt and utt.native_text.strip():
-                        results.append(utt)
-                        if self.p:
-                            self.p.chunk_ok(chunk.chunk_id, utt.language_detected,
-                                            utt.native_text, utt.english_text)
-                    else:
-                        if self.p: self.p.chunk_fail(chunk.chunk_id, "empty")
-                except Exception as exc:
-                    logger.warning(f"Chunk {chunk.chunk_id} failed: {exc}")
-                    if self.p: self.p.chunk_fail(chunk.chunk_id, str(exc)[:80])
-        return sorted(results, key=lambda u: u.start_time)
-
     # ── Setup utterance filter ────────────────────────────────────────────────
 
     @staticmethod
@@ -950,12 +923,3 @@ class DemoAuditPipelineV3:
 
         logger.info(f"Stripped {first_real} setup utterance(s) from transcript start")
         return utterances[first_real:]
-
-    # ── Speaker label injection ───────────────────────────────────────────────
-
-    @staticmethod
-    def _inject_speaker_labels(utterances, chunks, speaker_map):
-        for utt in utterances:
-            best = min(chunks, key=lambda c: abs(c.start_time - utt.start_time), default=None)
-            if best is not None:
-                utt.speaker = speaker_map.get(best.chunk_id, Speaker.UNKNOWN)
